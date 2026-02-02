@@ -8,11 +8,28 @@ Isaac Boteler
 Jacob Lontoc 
 Tommy Pham
 
+Meeting Times: 
 
+Every Friday between 1:00 and 3:00 
+Location: Library(?)
 
 Time Table (To be Updated):
 
-Day 1 - Jan 28th 
+Pre-meeting - Jan 28th X 
+
+Meeting 1 - Feb 6th 
+
+Meeting 2 - Feb 13th 
+
+Meeting 3 - Feb 20th 
+
+Meeting 4 - Feb 27th 
+
+Meeting 5 - Mar 6th 
+
+Meeting 6 - Mar 13th 
+
+Meeting 7 - Mar 20th 
 
 Modules Finished - X 
 
