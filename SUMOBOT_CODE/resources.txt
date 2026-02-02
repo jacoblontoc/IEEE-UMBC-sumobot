@@ -1,0 +1,28 @@
+Hardware interface libraries can be found here
+
+https://docs.arduino.cc/libraries/
+
+
+Zumo32U4 library (Official): 
+#This is the library we will be using
+#Consult the readme on their repo 
+https://docs.arduino.cc/libraries/zumo32u4/
+#Documentation for said libary 
+https://pololu.github.io/zumo-32u4-arduino-library/
+
+
+Additional libaries that may or may not be useful. 
+
+Proximity Sensors:
+https://docs.arduino.cc/libraries/bb_proximity/
+
+Line Sensors: 
+https://docs.arduino.cc/libraries/lsa08_simplified/
+
+
+Real Time Operating System:
+#time-critical os for arduino, this is a big maybe 
+#RTOS enforce computing deadlines, will crash if deadlines
+#are not met 
+https://docs.arduino.cc/libraries/freertos/
+
