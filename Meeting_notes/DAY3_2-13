@@ -1,0 +1,37 @@
+Third Meeting: 
+
+
+
+Assembled robot is missing an encoder and a cable to flash programs onto it. 
+
+Sample programs have been found and are ready to use. 
+
+
+Plans to begin testing speed and sensing capabilities of robot. 
+
+Objective 1 (Basic Tests): 
+    Determine effective range of IR sensors 
+    Determine speed of robot (forward , backwards, turning)
+    Find Delay from sensors and other wait type operations 
+
+Objective 2 (Combined Tests): 
+    Determine usefulness of line sensor based upon robot speed - can the bot detect the boundary before moving out of bounds? And what is the max delay before this occurs? 
+
+Objective 3 (Software Design): 
+    Determine design model via brainstorming and or research:
+
+    1) Variable Control Loop 
+
+    Each iteration of the loop function will scan for new data then calculate and carry out 1 action. 
+
+    Global variables will hold flags and other info for the calculation 
+
+    2) State Control Loop 
+
+    Similar to 1. But with the addition of 'states': code that would allow the robot to carry out a complex series of actions with limited decision making capabilities - Example: State Pushed-Back is on, the code will now attempt to escape, only decisions to consider is pushing back harder or backing up left or backing up right. 
+
+
+Questions to be answered: 
+
+What is the Doyho made of? (Asked coordinator, have not gotten a response back yet)
+
