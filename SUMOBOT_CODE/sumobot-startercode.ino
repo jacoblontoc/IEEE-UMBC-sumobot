@@ -52,9 +52,15 @@ enum RobotState {
   STATE_TESTING_MODE
 };
 
+RobotState currentState = STATE_IDLE;
+
+
 void setup()
 {
+display.clear();
+display.print("THE bot")
 
+currentState = 
 }
 
 void loop()
