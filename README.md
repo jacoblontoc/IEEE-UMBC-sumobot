@@ -8,35 +8,30 @@ This repository contains the code and documentation for the project and its deve
 - Jacob Lontoc 
 - Tommy Pham
 
-Meeting Times: 
-
+## Meeting Times
 Every Friday between 1:00 and 3:00 
-Location: Library(?)
+Location: Library
 
-Time Table (To be Updated):
+<details>
+<summary>Dates</summary>
+<ul><li>Pre-meeting - Jan 28th X </li>
+<li>Meeting 1 - Feb 6th </li>
+<li>Meeting 2 - Feb 13th  </li>
+<li>Meeting 3 - Feb 20th </li>
+<li>Meeting 4 - Feb 27th  </li>
+<li>Meeting 5 - Mar 6th  </li>
+<li>Meeting 6 - Mar 13th  </li>
+<li>Meeting 7 - Mar 20th  </li></ul>
+</details>
 
-Pre-meeting - Jan 28th X 
+## Summarized Checklist
+- [ ] Soldering Robot
+- [ ] Creating state machine
+- [ ] Programming basic states
+- [ ] Programming attack state
+- [ ] Programming search state
+- [ ] Programming defense state?
 
-Meeting 1 - Feb 6th 
-
-Meeting 2 - Feb 13th 
-
-Meeting 3 - Feb 20th 
-
-Meeting 4 - Feb 27th 
-
-Meeting 5 - Mar 6th 
-
-Meeting 6 - Mar 13th 
-
-Meeting 7 - Mar 20th 
-
-Modules Finished - X 
-
-Robot Built - Y 
-
-Prototype Finished - Z 
-
+## Dates
 Day END - Mar 19st 
-
 Day COMPETITION - Mar 20th 
