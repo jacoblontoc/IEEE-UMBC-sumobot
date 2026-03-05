@@ -33,5 +33,6 @@ Location: Library
 - [ ] Programming defense state?
 
 ## Dates
-Day END - Mar 19st 
+Day END - Mar 19st
+
 Day COMPETITION - Mar 20th 
