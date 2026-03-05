@@ -43,13 +43,10 @@ const unsigned long REACQUIRED_TIMOUT = 400;
 // State Machine
 enum RobotState {
   STATE_IDLE,
-  STATE_COUNTDOWN,
-  STATE_SCAN_360,
   STATE_CROSS_RING,
   STATE_SEARCH,
   STATE_ATTACK,
-  STATE_STOPPED,
-  STATE_TESTING_MODE
+  STATE_TEST
 };
 
 RobotState currentState = STATE_IDLE;
@@ -57,13 +54,69 @@ RobotState currentState = STATE_IDLE;
 
 void setup()
 {
-display.clear();
-display.print("THE bot")
 
-currentState = 
+  display.clear();
+  display.print("THE bot")
+
+  currentState =
 }
 
 void loop()
 {
 
+  if (buttonB.getSingleDebouncedPress()) // right 
+  {
+    return;
+  }
+
+  switch (currentState)
+  {
+  case STATE_IDLE:
+    handleIdle();
+    break;
+  case STATE_CROSS_RING:
+    handleCrossRing();
+    break;
+  case STATE_SEARCH:
+    handleSearch();
+    break;
+  case STATE_ATTACK:
+    handleAttack();
+    break;
+  case STATE_TEST:
+    handleTestMode();
+    break;
+  }
+}
+
+void handleCountdown()
+{
+  unsigned long elapsed = millis() = stateStartTime;
+  int remaining = 5 - (int)(elapsed / 1000);
+
+  if (remaining > 0 && remaining <= 5) {
+    if (remaining !=  lastPlayedSecond) {
+      lastPlayedSecond = remaining;
+
+       display.clear();
+       display.gotoXY(2,0);
+       display.print(remaining);
+
+       switch (remaining) {
+        case 5: buzzer.playNote(NOTE_C(4), 150, 12); break;
+        case 4: buzzer.playNote(NOTE_D(4), 150, 12); break;
+        case 3: buzzer.playNote(NOTE_E(4), 150, 12); break;
+        case 2: buzzer.playNote(NOTE_G(4), 150, 12); break;
+        case 1: buzzer.playNote(NOTE_A(4), 150, 12); break;
+      }
+    }
+  } else if {
+    display.clear();
+    display.gotoXY(2, 0);
+    display.print("Go!!!");
+    buzzer.playNote(NOTE_G(4), 150, 12); break;
+    delay(300);
+
+    // prep for 360 scan
+  }
 }
