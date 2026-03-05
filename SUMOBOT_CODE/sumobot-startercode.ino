@@ -26,7 +26,7 @@ uint16_t lineSensorValues[NUM_LINE_SENSORS];
 const uint8_t PROX_SEARCH_THRESHOLD = 3;
 const uint8_t PROX_ATTACK_THRESHOLD = 3;
 
-// Speed Settings
+// Spee2d Settings
 const int16_t SEARCH_SPEED = 100;
 const int16_t ATTACK_SPEED = 400;
 const int16_t SCAN_SPEED = 250;
@@ -54,11 +54,19 @@ RobotState currentState = STATE_IDLE;
 
 void setup()
 {
+  Serial.begin(9600);
+
+  lineSensors.initFiveSensors();
+  proxSensors.initFrontSensors();
+
+  turnSensorSetup();
 
   display.clear();
-  display.print("THE bot")
+  display.print(F("Left"));
+  display.gotoXY(0, 1);
+  display.print(F("Right Test"))
 
-  currentState =
+  currentState = STATE_IDLE;
 }
 
 void loop()
@@ -86,6 +94,16 @@ void loop()
   case STATE_TEST:
     handleTestMode();
     break;
+  }
+}
+
+void handleIdle()
+{
+  if (buttonA.getSingleDebouncedPress())
+  {
+    ledRed(0);
+    doCountdownAndScan(false);
+    currentState = STATE_CROSS_RING;
   }
 }
 
@@ -118,5 +136,8 @@ void handleCountdown()
     delay(300);
 
     // prep for 360 scan
+    encoders.getCountsAndResetLeft();
+    encoders.getCountsAndResetRight();
+    turnSensorReset();
   }
 }
