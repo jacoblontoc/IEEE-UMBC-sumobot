@@ -11,6 +11,11 @@ Zumo32U4ButtonA buttonA;
 Zumo32U4ButtonB buttonB;
 Zumo32U4ButtonC buttonC;
 
+// MOTOR ORIENTATION
+// Set to true if the robot's motors are mounted upside-down
+// (drives backward when it should go forward)
+const bool INVERT_MOTORS = false;
+
 //  DYNAMIC FLOOR CALIBRATION
 //  CALIBRATION_SAMPLES  — readings averaged per sensor when A/C starts a match
 //  CALIBRATION_DELAY_MS — pause between samples during floor calibration
@@ -69,6 +74,15 @@ bool searchDriving = true;
 bool lastSenseRight = true;       // last-known opponent side
 unsigned long objectLastSeen = 0; // millis() timestamp
 
+// Wraps motors.setSpeeds() — flips both channels if INVERT_MOTORS is true
+void drive(int16_t left, int16_t right)
+{
+  if (INVERT_MOTORS)
+    motors.setSpeeds(-left, -right);
+  else
+    motors.setSpeeds(left, right);
+}
+
 //                         SETUP
 void setup()
 {
@@ -108,7 +122,7 @@ void loop()
 //  EMERGENCY STOP — returns to IDLE
 void emergencyStop()
 {
-  motors.setSpeeds(0, 0);
+  drive(0, 0);
   buzzer.playNote(NOTE_C(3), 300, BUZZER_VOLUME);
   ledYellow(0);
   ledRed(1);
@@ -260,9 +274,9 @@ void doCountdownAndScan(bool scanCW)
   while (true)
   {
     if (scanCW)
-      motors.setSpeeds(SCAN_SPEED, -SCAN_SPEED);
+      drive(SCAN_SPEED, -SCAN_SPEED);
     else
-      motors.setSpeeds(-SCAN_SPEED, SCAN_SPEED);
+      drive(-SCAN_SPEED, SCAN_SPEED);
 
     // Check for opponent while spinning
     proxSensors.read();
@@ -271,14 +285,14 @@ void doCountdownAndScan(bool scanCW)
 
     if (lv >= PROX_SEARCH_THRESHOLD || rv >= PROX_SEARCH_THRESHOLD)
     {
-      motors.setSpeeds(0, 0);
+      drive(0, 0);
       transitionToAttack(rv >= lv);
       return; // go straight to ATTACK — caller's CROSS_RING set is skipped
     }
 
     if (millis() - scanStart >= SCAN_TIMEOUT)
     {
-      motors.setSpeeds(0, 0);
+      drive(0, 0);
       display.clear();
       display.print(F("CROSS"));
       return;
@@ -303,7 +317,7 @@ void handleCrossRing()
 
   if (lv >= PROX_SEARCH_THRESHOLD || rv >= PROX_SEARCH_THRESHOLD)
   {
-    motors.setSpeeds(0, 0);
+    drive(0, 0);
     transitionToAttack(rv >= lv);
     return;
   }
@@ -318,7 +332,7 @@ void handleCrossRing()
   // Drive forward at search speed
   display.gotoXY(0, 0);
   display.print(F("CROSSING"));
-  motors.setSpeeds(SEARCH_SPEED, SEARCH_SPEED);
+  drive(SEARCH_SPEED, SEARCH_SPEED);
 
   //  Timeout → should have crossed by now, begin search
   if (millis() - stateStartTime > CROSS_RING_TIME)
@@ -344,7 +358,7 @@ void handleSearch()
 
   if (lv >= PROX_SEARCH_THRESHOLD || rv >= PROX_SEARCH_THRESHOLD)
   {
-    motors.setSpeeds(0, 0);
+    drive(0, 0);
     transitionToAttack(rv >= lv);
     return;
   }
@@ -364,7 +378,7 @@ void handleSearch()
 
   if (searchDriving)
   {
-    motors.setSpeeds(SEARCH_SPEED, SEARCH_SPEED);
+    drive(SEARCH_SPEED, SEARCH_SPEED);
     if (legElapsed > SEARCH_DRIVE_TIME)
     {
       searchDriving = false;
@@ -375,9 +389,9 @@ void handleSearch()
   {
     // Turn in the current search direction
     if (searchTurnDir)
-      motors.setSpeeds(-TURN_SPEED, TURN_SPEED); // left
+      drive(-TURN_SPEED, TURN_SPEED); // left
     else
-      motors.setSpeeds(TURN_SPEED, -TURN_SPEED); // right
+      drive(TURN_SPEED, -TURN_SPEED); // right
 
     if (legElapsed > SEARCH_TURN_TIME)
     {
@@ -393,10 +407,9 @@ void handleSearch()
 }
 
 //  STATE: ATTACK — charge the opponent!
-
 void handleAttack()
 {
-  // ── B button = emergency stop ──
+  // B button = emergency stop
   if (buttonB.getSingleDebouncedPress())
   {
     emergencyStop();
@@ -438,20 +451,20 @@ void handleAttack()
     {
       // Object biased right — curve right
       int16_t adj = map(rv - lv, 0, 6, 0, 300);
-      motors.setSpeeds(ATTACK_SPEED, ATTACK_SPEED - adj);
+      drive(ATTACK_SPEED, ATTACK_SPEED - adj);
       lastSenseRight = true;
     }
     else if (lv > rv)
     {
       // Object biased left — curve left
       int16_t adj = map(lv - rv, 0, 6, 0, 300);
-      motors.setSpeeds(ATTACK_SPEED - adj, ATTACK_SPEED);
+      drive(ATTACK_SPEED - adj, ATTACK_SPEED);
       lastSenseRight = false;
     }
     else
     {
       // Dead-centre — full charge!
-      motors.setSpeeds(ATTACK_SPEED, ATTACK_SPEED);
+      drive(ATTACK_SPEED, ATTACK_SPEED);
     }
 
     display.gotoXY(0, 1);
@@ -469,9 +482,9 @@ void handleAttack()
     display.print(F("LOST    "));
 
     if (lastSenseRight)
-      motors.setSpeeds(TURN_SPEED, -TURN_SPEED); // turn right
+      drive(TURN_SPEED, -TURN_SPEED); // turn right
     else
-      motors.setSpeeds(-TURN_SPEED, TURN_SPEED); // turn left
+      drive(-TURN_SPEED, TURN_SPEED); // turn left
 
     // Give up after REACQUIRE_TIMEOUT and switch to search
     if (millis() - objectLastSeen > REACQUIRE_TIMEOUT)
@@ -491,7 +504,7 @@ void transitionToAttack(bool opponentOnRight)
   stateStartTime = millis();
 
   ledYellow(1);
-  buzzer.playNote(NOTE_C(6), 300, BUZZER_VOLUME); // high-pitch beep — target found
+  buzzer.playNote(NOTE_C(6), 300, BUZZER_VOLUME);
   display.clear();
   display.print(F("ATTACK!"));
 }
@@ -499,7 +512,7 @@ void transitionToAttack(bool opponentOnRight)
 //  HELPER: transition into SEARCH state
 void transitionToSearch()
 {
-  motors.setSpeeds(0, 0);
+  drive(0, 0);
 
   searchDriving = true;
   searchTurnDir = !searchTurnDir; // vary direction each time
@@ -509,7 +522,7 @@ void transitionToSearch()
   stateStartTime = millis();
 
   ledYellow(0);
-  buzzer.playNote(NOTE_C(3), 400, BUZZER_VOLUME); // low-pitch beep — target lost
+  buzzer.playNote(NOTE_C(3), 400, BUZZER_VOLUME);
   display.clear();
   display.print(F("SEARCH"));
 }
@@ -635,17 +648,17 @@ void bounceOffBoundary()
   display.print(F("BOUNDARY"));
 
   // Reverse briefly
-  motors.setSpeeds(-EVADE_SPEED, -EVADE_SPEED);
+  drive(-EVADE_SPEED, -EVADE_SPEED);
   delay(400);
 
   // Turn away from the boundary edge
   if (side <= 0) // left or centre → turn right
-    motors.setSpeeds(TURN_SPEED, -TURN_SPEED);
+    drive(TURN_SPEED, -TURN_SPEED);
   else // right → turn left
-    motors.setSpeeds(-TURN_SPEED, TURN_SPEED);
+    drive(-TURN_SPEED, TURN_SPEED);
 
   delay(250 + random(200)); // randomised to vary the search path
 
-  motors.setSpeeds(0, 0);
+  drive(0, 0);
   ledRed(0);
 }
