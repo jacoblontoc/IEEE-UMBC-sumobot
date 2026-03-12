@@ -3,15 +3,15 @@
  *  ============================================================
  *
  *  CONTROLS
- *    Button A — Start 5-second countdown, then fight
+ *    Button A — Start 5-second countdown + CCW scan, then fight
  *    Button B — Emergency stop (kills motors, returns to idle)
- *    Button C — Enter TEST MODE from idle/stopped; cycles tests
+ *    Button C — Start 5-second countdown + CW scan, then fight
  *
  *  STATE MACHINE
- *    IDLE ──(A/B)──▶ [countdown + 360° scan] ──▶ CROSS_RING ──▶ SEARCH
+ *    IDLE ──(A)──▶ [countdown + CCW scan] ──▶ CROSS_RING ──▶ SEARCH
+ *    IDLE ──(C)──▶ [countdown + CW scan]  ──▶ CROSS_RING ──▶ SEARCH
  *    SEARCH ──▶ ATTACK ──▶ SEARCH
  *    Any state ──(B)──▶ IDLE
- *    IDLE ──(C)──▶ TEST (C cycles sub-modes, B exits)
  *
  *  OFFENSIVE
  *    • Fast 360° spin to locate the opponent via proximity sensors
@@ -84,6 +84,9 @@ const int16_t SCAN_SPEED = 250;   // 360° scan
 const int16_t EVADE_SPEED = 400;  // escape burst
 const int16_t TURN_SPEED = 400;   // general turning
 
+// ===================== BUZZER VOLUME =============================
+const uint8_t BUZZER_VOLUME = 9; // 0–15 — applies to every sound
+
 // ============= ENCODER / PUSH-DETECTION SETTINGS =================
 //  While commanding forward at ATTACK_SPEED, the encoders
 //  normally return a large positive count every PUSH_CHECK_INTERVAL.
@@ -106,29 +109,8 @@ enum RobotState
   STATE_IDLE,
   STATE_CROSS_RING,
   STATE_SEARCH,
-  STATE_ATTACK,
-  STATE_TEST
+  STATE_ATTACK
 };
-
-// ===================== TEST MODE SUB-MODES =======================
-enum TestMode
-{
-  TEST_LINE_SENSORS, // raw line-sensor values → LCD + Serial
-  TEST_PROXIMITY,    // proximity sensor readings → LCD + Serial
-  TEST_ENCODERS,     // encoder counts (push-detection check)
-  TEST_MOTORS,       // spin motors at low speed
-  TEST_GYRO,         // live gyro angle
-  TEST_PUSH_DETECT,  // drive forward slowly, beep + evade on push
-  NUM_TEST_MODES     // sentinel — always last
-};
-
-TestMode currentTestMode = TEST_LINE_SENSORS;
-unsigned long testPrintTimer = 0;
-const unsigned long TEST_PRINT_INTERVAL = 150; // ms between serial prints
-
-// Push-detect test mode helpers
-bool testPushEvading = false;
-unsigned long testEvadeStart = 0;
 
 RobotState currentState = STATE_IDLE;
 unsigned long stateStartTime = 0;
@@ -155,13 +137,10 @@ void setup()
   lineSensors.initFiveSensors();
   proxSensors.initFrontSensor();
 
-  // Calibrate the gyro — robot must be still on the table
-  turnSensorSetup();
-
   display.clear();
-  display.print(F("A=Left"));
+  display.print(F("A=CCW B=Stp"));
   display.gotoXY(0, 1);
-  display.print(F("B=Right C=Tst"));
+  display.print(F("C=CW"));
 
   currentState = STATE_IDLE;
 }
@@ -185,9 +164,6 @@ void loop()
   case STATE_ATTACK:
     handleAttack();
     break;
-  case STATE_TEST:
-    handleTestMode();
-    break;
   }
 }
 
@@ -197,41 +173,37 @@ void loop()
 void emergencyStop()
 {
   motors.setSpeeds(0, 0);
-  buzzer.playNote(NOTE_C(3), 300, 15);
+  buzzer.playNote(NOTE_C(3), 300, BUZZER_VOLUME);
   ledYellow(0);
   ledRed(1);
   display.clear();
   display.print(F("STOPPED"));
   display.gotoXY(0, 1);
-  display.print(F("A=L B=R C=T"));
+  display.print(F("A=CCW C=CW"));
   currentState = STATE_IDLE;
 }
 
 // =================================================================
 //  STATE: IDLE — waiting for button press
-//    A = countdown + scan left, then fight
-//    B = countdown + scan right, then fight
-//    C = test mode
+//    A = countdown + CCW scan, then fight
+//    B = emergency stop
+//    C = countdown + CW scan, then fight
 // =================================================================
 void handleIdle()
 {
   if (buttonA.getSingleDebouncedPress())
   {
-    ledRed(0)
-        doCountdownAndScan(false); // scan left (CCW)
-    currentState = STATE_CROSS_RING;
-    stateStartTime = millis();
-  }
-  else if (buttonB.getSingleDebouncedPress())
-  {
     ledRed(0);
-    doCountdownAndScan(true); // scan right (CW)
+    doCountdownAndScan(false); // scan left (CCW)
     currentState = STATE_CROSS_RING;
     stateStartTime = millis();
   }
   else if (buttonC.getSingleDebouncedPress())
   {
-    enterTestMode();
+    ledRed(0);
+    doCountdownAndScan(true); // scan right (CW)
+    currentState = STATE_CROSS_RING;
+    stateStartTime = millis();
   }
 }
 
@@ -255,19 +227,19 @@ void doCountdownAndScan(bool scanCW)
     switch (i)
     {
     case 5:
-      buzzer.playNote(NOTE_C(4), 150, 12);
+      buzzer.playNote(NOTE_C(4), 150, BUZZER_VOLUME);
       break;
     case 4:
-      buzzer.playNote(NOTE_D(4), 150, 12);
+      buzzer.playNote(NOTE_D(4), 150, BUZZER_VOLUME);
       break;
     case 3:
-      buzzer.playNote(NOTE_E(4), 150, 12);
+      buzzer.playNote(NOTE_E(4), 150, BUZZER_VOLUME);
       break;
     case 2:
-      buzzer.playNote(NOTE_G(4), 150, 12);
+      buzzer.playNote(NOTE_G(4), 150, BUZZER_VOLUME);
       break;
     case 1:
-      buzzer.playNote(NOTE_A(4), 150, 12);
+      buzzer.playNote(NOTE_A(4), 150, BUZZER_VOLUME);
       break;
     }
     delay(1000);
@@ -277,7 +249,7 @@ void doCountdownAndScan(bool scanCW)
   display.clear();
   display.gotoXY(2, 0);
   display.print(F("GO!"));
-  buzzer.playNote(NOTE_C(6), 300, 15);
+  buzzer.playNote(NOTE_C(6), 300, BUZZER_VOLUME);
   delay(300);
 
   // ── 360° scan (blocking spin) ──
@@ -315,10 +287,6 @@ void doCountdownAndScan(bool scanCW)
     uint32_t rotated = scanCW ? -turnAngle : turnAngle;
     int32_t degrees = ((int32_t)(rotated >> 16) * 360L) >> 16;
 
-    display.gotoXY(0, 1);
-    display.print(degrees);
-    display.print(F(" deg  "));
-
     // Full rotation complete (with 1s guard against gyro noise)
     if (millis() - scanStart > 1000 && degrees >= 350)
     {
@@ -354,14 +322,6 @@ void handleCrossRing()
     return;
   }
 
-  // ── Hit boundary → stop crossing, begin fuzzy search ──
-  // COMMENTED OUT FOR TESTING — boundary detection disabled
-  // if (checkBoundary())
-  // {
-  //   bounceOffBoundary();
-  //   transitionToSearch();
-  //   return;
-  // }
 
   // ── Drive forward at search speed ──
   motors.setSpeeds(SEARCH_SPEED, SEARCH_SPEED);
@@ -396,16 +356,6 @@ void handleSearch()
     transitionToAttack(rv >= lv);
     return;
   }
-
-  // ── Bounce off boundary ──
-  // COMMENTED OUT FOR TESTING — boundary detection disabled
-  // if (checkBoundary())
-  // {
-  //   bounceOffBoundary();
-  //   searchLegStart = millis();
-  //   searchDriving  = true;
-  //   return;
-  // }
 
   // ── Alternating drive / turn legs ──
   unsigned long legElapsed = millis() - searchLegStart;
@@ -456,43 +406,6 @@ void handleAttack()
   uint8_t lv = proxSensors.countsFrontWithLeftLeds();
   uint8_t rv = proxSensors.countsFrontWithRightLeds();
   bool seen = (lv >= PROX_ATTACK_THRESHOLD) || (rv >= PROX_ATTACK_THRESHOLD);
-
-  // ── Boundary check — do not drive off the ring ──
-  // COMMENTED OUT FOR TESTING — boundary detection disabled
-  // if (checkBoundary())
-  // {
-  //   bounceOffBoundary();
-  //
-  //   // If we still see the opponent, keep attacking; otherwise search
-  //   proxSensors.read();
-  //   lv = proxSensors.countsFrontWithLeftLeds();
-  //   rv = proxSensors.countsFrontWithRightLeds();
-  //   if (lv >= PROX_ATTACK_THRESHOLD || rv >= PROX_ATTACK_THRESHOLD)
-  //   {
-  //     lastSenseRight = (rv >= lv);
-  //     objectLastSeen = millis();
-  //   }
-  //   else
-  //   {
-  //     transitionToSearch();
-  //   }
-  //   return;
-  // }
-
-  // ── Push detection (always active — testing) ──
-  // If pushed, do a quick inline evade then go to search
-  if (checkBeingPushed())
-  {
-    // Burst reverse
-    motors.setSpeeds(-EVADE_SPEED, -EVADE_SPEED);
-    delay(EVADE_DURATION / 3);
-    // Quick spin
-    motors.setSpeeds(EVADE_SPEED, -EVADE_SPEED);
-    delay(EVADE_DURATION / 3);
-    motors.setSpeeds(0, 0);
-    transitionToSearch();
-    return;
-  }
 
   if (seen)
   {
@@ -546,27 +459,6 @@ void handleAttack()
 }
 
 // =================================================================
-//  HELPER: transition into SEARCH state
-// =================================================================
-void transitionToAttack(bool opponentOnRight)
-{
-  lastSenseRight = opponentOnRight;
-  objectLastSeen = millis();
-
-  encoders.getCountsAndResetLeft();
-  encoders.getCountsAndResetRight();
-  lastPushCheck = millis();
-
-  currentState = STATE_ATTACK;
-  stateStartTime = millis();
-
-  ledYellow(1);
-  buzzer.playNote(NOTE_C(6), 300, 15); // high-pitch beep — target found
-  display.clear();
-  display.print(F("ATTACK!"));
-}
-
-// =================================================================
 //  HELPER: transition into ATTACK state
 // =================================================================
 void transitionToAttack(bool opponentOnRight)
@@ -582,7 +474,7 @@ void transitionToAttack(bool opponentOnRight)
   stateStartTime = millis();
 
   ledYellow(1);
-  buzzer.playNote(NOTE_C(6), 300, 15); // high-pitch beep — target found
+  buzzer.playNote(NOTE_C(6), 300, BUZZER_VOLUME); // high-pitch beep — target found
   display.clear();
   display.print(F("ATTACK!"));
 }
@@ -606,7 +498,7 @@ void transitionToSearch()
   stateStartTime = millis();
 
   ledYellow(0);
-  buzzer.playNote(NOTE_C(3), 400, 15); // low-pitch beep — target lost
+  buzzer.playNote(NOTE_C(3), 400, BUZZER_VOLUME); // low-pitch beep — target lost
   display.clear();
   display.print(F("SEARCH"));
 }
@@ -705,308 +597,4 @@ bool checkBeingPushed()
   // Both wheels barely turning despite full-speed command → pushed
   return (leftCounts < PUSH_DETECT_THRESHOLD &&
           rightCounts < PUSH_DETECT_THRESHOLD);
-}
-
-// =================================================================
-//  TEST MODE  —  C button cycles sub-modes, B exits
-// =================================================================
-//  Sub-modes:
-//    1. Line Sensors  — raw readings on LCD + Serial (for colour calibration)
-//    2. Proximity     — front proximity L/R values
-//    3. Encoders      — live encoder counts + push-detect flag
-//    4. Motors        — spins wheels slowly so you can verify direction
-//    5. Gyro          — live angle in degrees
-// =================================================================
-
-void enterTestMode()
-{
-  motors.setSpeeds(0, 0);
-  currentTestMode = TEST_LINE_SENSORS;
-  currentState = STATE_TEST;
-  testPrintTimer = 0;
-
-  encoders.getCountsAndResetLeft();
-  encoders.getCountsAndResetRight();
-  turnSensorReset();
-
-  ledRed(0);
-  ledYellow(0);
-
-  showTestModeHeader();
-
-  Serial.println(F("\n===== ENTERING TEST MODE ====="));
-  Serial.println(F("C = next test | B = exit\n"));
-}
-
-// Print the name of the current test on the LCD.
-void showTestModeHeader()
-{
-  display.clear();
-  display.gotoXY(0, 0);
-  switch (currentTestMode)
-  {
-  case TEST_LINE_SENSORS:
-    display.print(F("T:LineSns"));
-    break;
-  case TEST_PROXIMITY:
-    display.print(F("T:Prox"));
-    break;
-  case TEST_ENCODERS:
-    display.print(F("T:Encoder"));
-    break;
-  case TEST_MOTORS:
-    display.print(F("T:Motors"));
-    break;
-  case TEST_GYRO:
-    display.print(F("T:Gyro"));
-    break;
-  case TEST_PUSH_DETECT:
-    display.print(F("T:Push"));
-    break;
-  default:
-    break;
-  }
-}
-
-void handleTestMode()
-{
-  // ── C button → cycle to next test sub-mode ──
-  if (buttonC.getSingleDebouncedPress())
-  {
-    motors.setSpeeds(0, 0); // stop motors when switching
-    currentTestMode = (TestMode)((int)currentTestMode + 1);
-    if (currentTestMode >= NUM_TEST_MODES)
-      currentTestMode = TEST_LINE_SENSORS;
-
-    // reset helpers for the new mode
-    encoders.getCountsAndResetLeft();
-    encoders.getCountsAndResetRight();
-    turnSensorReset();
-    testPrintTimer = 0;
-    testPushEvading = false;
-    lastPushCheck = millis();
-
-    showTestModeHeader();
-    Serial.print(F("\n--- Switched to test: "));
-    Serial.println((int)currentTestMode);
-    return;
-  }
-
-  // ── Throttled output (LCD + Serial) ──
-  bool shouldPrint = (millis() - testPrintTimer >= TEST_PRINT_INTERVAL);
-
-  switch (currentTestMode)
-  {
-  // ─────────────────────────────────────────────────────────────
-  //  LINE SENSORS — raw values for colour / threshold calibration
-  //  Serial format:  LINE  s0  s1  s2  s3  s4  (tab-separated)
-  //  Open Serial Plotter to see live graphs.
-  // ─────────────────────────────────────────────────────────────
-  case TEST_LINE_SENSORS:
-  {
-    lineSensors.read(lineSensorValues);
-    // LCD: show first and last sensor + boundary flag
-    display.gotoXY(0, 1);
-    display.print(lineSensorValues[0]);
-    display.print(' ');
-    display.print(lineSensorValues[4]);
-    display.print(checkBoundary() ? F(" B") : F("  "));
-
-    if (shouldPrint)
-    {
-      testPrintTimer = millis();
-      Serial.print(F("LINE\t"));
-      for (uint8_t i = 0; i < NUM_LINE_SENSORS; i++)
-      {
-        Serial.print(lineSensorValues[i]);
-        if (i < NUM_LINE_SENSORS - 1)
-          Serial.print('\t');
-      }
-      Serial.print(F("\tBoundary="));
-      Serial.println(checkBoundary() ? F("YES") : F("no"));
-    }
-    break;
-  }
-
-  // ─────────────────────────────────────────────────────────────
-  //  PROXIMITY SENSORS
-  // ─────────────────────────────────────────────────────────────
-  case TEST_PROXIMITY:
-  {
-    proxSensors.read();
-    uint8_t lv = proxSensors.countsFrontWithLeftLeds();
-    uint8_t rv = proxSensors.countsFrontWithRightLeds();
-    bool seen = (lv >= PROX_SEARCH_THRESHOLD) || (rv >= PROX_SEARCH_THRESHOLD);
-
-    display.gotoXY(0, 1);
-    display.print(F("L"));
-    display.print(lv);
-    display.print(F(" R"));
-    display.print(rv);
-    display.print(seen ? F(" !") : F("  "));
-
-    if (shouldPrint)
-    {
-      testPrintTimer = millis();
-      Serial.print(F("PROX\tL="));
-      Serial.print(lv);
-      Serial.print(F("\tR="));
-      Serial.print(rv);
-      Serial.print(F("\tSeen="));
-      Serial.println(seen ? F("YES") : F("no"));
-    }
-    break;
-  }
-
-  // ─────────────────────────────────────────────────────────────
-  //  ENCODERS + PUSH DETECTION
-  //  Does NOT reset counts so you see cumulative ticks.
-  //  Push detect runs against a short sample window.
-  // ─────────────────────────────────────────────────────────────
-  case TEST_ENCODERS:
-  {
-    int16_t lc = encoders.getCountsLeft();
-    int16_t rc = encoders.getCountsRight();
-
-    display.gotoXY(0, 1);
-    display.print(lc);
-    display.print(' ');
-    display.print(rc);
-    display.print(F("   "));
-
-    if (shouldPrint)
-    {
-      testPrintTimer = millis();
-      Serial.print(F("ENC\tL="));
-      Serial.print(lc);
-      Serial.print(F("\tR="));
-      Serial.println(rc);
-    }
-    break;
-  }
-
-  // ─────────────────────────────────────────────────────────────
-  //  MOTORS — slow spin so you can verify wiring + direction
-  //  Left turns forward, Right turns forward, both at 100.
-  // ─────────────────────────────────────────────────────────────
-  case TEST_MOTORS:
-  {
-    motors.setSpeeds(100, 100);
-    int16_t lc = encoders.getCountsLeft();
-    int16_t rc = encoders.getCountsRight();
-
-    display.gotoXY(0, 1);
-    display.print(F("FWD 100 "));
-
-    if (shouldPrint)
-    {
-      testPrintTimer = millis();
-      Serial.print(F("MOTOR\tspd=100\tencL="));
-      Serial.print(lc);
-      Serial.print(F("\tencR="));
-      Serial.println(rc);
-    }
-    break;
-  }
-
-  // ─────────────────────────────────────────────────────────────
-  //  GYRO — live angle (degrees)
-  // ─────────────────────────────────────────────────────────────
-  case TEST_GYRO:
-  {
-    turnSensorUpdate();
-    int32_t degrees = (((int32_t)turnAngle >> 16) * 360) >> 16;
-
-    display.gotoXY(0, 1);
-    display.print(degrees);
-    display.print(F(" deg  "));
-
-    if (shouldPrint)
-    {
-      testPrintTimer = millis();
-      Serial.print(F("GYRO\tdeg="));
-      Serial.println(degrees);
-    }
-    break;
-  }
-
-  // ─────────────────────────────────────────────────────────────
-  //  PUSH DETECTION — drive forward slowly, beep + evade on push
-  // ─────────────────────────────────────────────────────────────
-  case TEST_PUSH_DETECT:
-  {
-    if (testPushEvading)
-    {
-      // ── Mini evade sequence inside test mode ──
-      unsigned long evadeElapsed = millis() - testEvadeStart;
-
-      if (evadeElapsed < EVADE_DURATION / 3)
-      {
-        motors.setSpeeds(-EVADE_SPEED, -EVADE_SPEED); // reverse
-        display.gotoXY(0, 1);
-        display.print(F("<<REV "));
-      }
-      else if (evadeElapsed < EVADE_DURATION * 2 / 3)
-      {
-        motors.setSpeeds(EVADE_SPEED, -EVADE_SPEED); // spin CW
-        display.gotoXY(0, 1);
-        display.print(F(">>SPIN"));
-      }
-      else
-      {
-        // Evade done — resume crawling forward
-        motors.setSpeeds(0, 0);
-        testPushEvading = false;
-        encoders.getCountsAndResetLeft();
-        encoders.getCountsAndResetRight();
-        lastPushCheck = millis();
-        display.gotoXY(0, 1);
-        display.print(F("ready "));
-        Serial.println(F("PUSH\tEvade complete — resuming"));
-      }
-    }
-    else
-    {
-      // ── Crawl forward and monitor for push ──
-      motors.setSpeeds(100, 100);
-
-      if (checkBeingPushed())
-      {
-        // Push detected! Beep and evade
-        buzzer.playNote(NOTE_A(5), 200, 15);
-        testPushEvading = true;
-        testEvadeStart = millis();
-        Serial.println(F("PUSH\t*** PUSH DETECTED — evading ***"));
-
-        display.gotoXY(0, 1);
-        display.print(F("PUSH! "));
-      }
-      else
-      {
-        int16_t lc = encoders.getCountsLeft();
-        int16_t rc = encoders.getCountsRight();
-
-        display.gotoXY(0, 1);
-        display.print(F("OK "));
-        display.print(lc);
-        display.print(' ');
-        display.print(rc);
-        display.print(F("  "));
-
-        if (shouldPrint)
-        {
-          testPrintTimer = millis();
-          Serial.print(F("PUSH\tL="));
-          Serial.print(lc);
-          Serial.print(F("\tR="));
-          Serial.println(rc);
-        }
-      }
-    }
-    break;
-  }
-
-  default:
-    break;
-  }
 }
