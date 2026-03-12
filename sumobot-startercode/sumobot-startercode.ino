@@ -25,11 +25,11 @@ bool floorCalibrated = false;
 // PROXIMITY THRESHOLDS
 // OPT: unified to 3 — engage and hold target sooner in all modes
 const uint8_t PROX_SEARCH_THRESHOLD = 3;
-const uint8_t PROX_ATTACK_THRESHOLD = 3; // was 4 — lowered to lock on earlier
+const uint8_t PROX_ATTACK_THRESHOLD = 3;
 
 // SPEED SETTINGS
 // OPT: SEARCH_SPEED raised to 400 — cover ring faster, engage sooner
-const int16_t SEARCH_SPEED = 400; // was 300
+const int16_t SEARCH_SPEED = 400; 
 const int16_t ATTACK_SPEED = 400;
 const int16_t SCAN_SPEED   = 400;
 const int16_t EVADE_SPEED  = 400;
@@ -41,10 +41,10 @@ const uint8_t BUZZER_VOLUME = 9;
 // SCAN / SEARCH TIMING
 // OPT: SCAN_TIMEOUT reduced — full spin takes <2s at this speed, 2500 wastes time
 // OPT: search legs tightened — denser sweep pattern
-const unsigned long SCAN_TIMEOUT       = 2000;  // was 2500
+const unsigned long SCAN_TIMEOUT       = 2000;  
 const unsigned long CROSS_RING_TIME    = 1200;
-const unsigned long SEARCH_DRIVE_TIME  = 500;   // was 800
-const unsigned long SEARCH_TURN_TIME   = 300;   // was 400
+const unsigned long SEARCH_DRIVE_TIME  = 500;   
+const unsigned long SEARCH_TURN_TIME   = 300;
 const unsigned long REACQUIRE_TIMEOUT  = 400;
 
 // STATE MACHINE
@@ -77,9 +77,7 @@ int8_t evadeTurnDir;
 unsigned long evadePhaseStart;
 RobotState evadeReturnState; // which state to go to after evade completes
 
-// ──────────────────────────────────────────────────────────────
 //                         SETUP
-// ──────────────────────────────────────────────────────────────
 void setup()
 {
   Serial.begin(9600);
@@ -95,9 +93,7 @@ void setup()
   currentState = STATE_IDLE;
 }
 
-// ──────────────────────────────────────────────────────────────
 //                        MAIN LOOP
-// ──────────────────────────────────────────────────────────────
 void loop()
 {
   switch (currentState)
@@ -110,9 +106,7 @@ void loop()
   }
 }
 
-// ──────────────────────────────────────────────────────────────
 //  EMERGENCY STOP
-// ──────────────────────────────────────────────────────────────
 void emergencyStop()
 {
   motors.setSpeeds(0, 0);
@@ -126,9 +120,7 @@ void emergencyStop()
   currentState = STATE_IDLE;
 }
 
-// ──────────────────────────────────────────────────────────────
 //  FLOOR CALIBRATION
-// ──────────────────────────────────────────────────────────────
 void calibrateFloor()
 {
   display.clear();
@@ -171,9 +163,7 @@ void calibrateFloor()
   delay(500);
 }
 
-// ──────────────────────────────────────────────────────────────
 //  STATE: IDLE
-// ──────────────────────────────────────────────────────────────
 void handleIdle()
 {
   if (buttonA.getSingleDebouncedPress())
@@ -194,9 +184,7 @@ void handleIdle()
   }
 }
 
-// ──────────────────────────────────────────────────────────────
 //  HELPER: 5-second countdown + 360° scan
-// ──────────────────────────────────────────────────────────────
 void doCountdownAndScan(bool scanCW)
 {
   unsigned long countdownStart = millis();
@@ -267,9 +255,7 @@ void doCountdownAndScan(bool scanCW)
   }
 }
 
-// ──────────────────────────────────────────────────────────────
 //  STATE: CROSS_RING
-// ──────────────────────────────────────────────────────────────
 void handleCrossRing()
 {
   if (buttonB.getSingleDebouncedPress()) { emergencyStop(); return; }
@@ -299,9 +285,7 @@ void handleCrossRing()
     transitionToSearch();
 }
 
-// ──────────────────────────────────────────────────────────────
 //  STATE: SEARCH
-// ──────────────────────────────────────────────────────────────
 void handleSearch()
 {
   if (buttonB.getSingleDebouncedPress()) { emergencyStop(); return; }
@@ -353,7 +337,6 @@ void handleSearch()
   display.print(searchDriving ? F(">>FWD ") : F(">>TRN "));
 }
 
-// ──────────────────────────────────────────────────────────────
 //  STATE: ATTACK
 //
 //  OPT 1: Opponent check comes BEFORE boundary check.
@@ -365,7 +348,6 @@ void handleSearch()
 //  OPT 2: Reacquire by curving forward rather than spinning
 //         in place — covers more ground and tracks a moving
 //         opponent better.
-// ──────────────────────────────────────────────────────────────
 void handleAttack()
 {
   if (buttonB.getSingleDebouncedPress()) { emergencyStop(); return; }
@@ -429,14 +411,12 @@ void handleAttack()
   }
 }
 
-// ──────────────────────────────────────────────────────────────
 //  STATE: EVADE  (replaces blocking bounceOffBoundary())
 //
 //  OPT: All delays replaced with millis()-based timing so the
 //       robot stays sensor-aware throughout the entire evade.
 //       Reverse trimmed 400ms → 250ms. Turn window tightened.
 //       After evade completes, returns to evadeReturnState.
-// ──────────────────────────────────────────────────────────────
 void handleEvade()
 {
   if (buttonB.getSingleDebouncedPress()) { emergencyStop(); return; }
@@ -488,9 +468,7 @@ void handleEvade()
   }
 }
 
-// ──────────────────────────────────────────────────────────────
 //  TRANSITION HELPERS
-// ──────────────────────────────────────────────────────────────
 void transitionToAttack(bool opponentOnRight)
 {
   lastSenseRight = opponentOnRight;
@@ -532,9 +510,7 @@ void transitionToEvade(RobotState returnTo)
   display.print(F("EVADE"));
 }
 
-// ──────────────────────────────────────────────────────────────
 //  BOUNDARY DETECTION
-// ──────────────────────────────────────────────────────────────
 unsigned long lastBoundaryDebug = 0;
 const unsigned long BOUNDARY_DEBUG_INTERVAL = 200;
 
@@ -614,6 +590,3 @@ int8_t getBoundarySide()
   if (rightHit)            return  1;
   return 0;
 }
-
-// NOTE: bounceOffBoundary() removed — replaced entirely by transitionToEvade()
-//       and handleEvade(). No more blocking delay() calls.

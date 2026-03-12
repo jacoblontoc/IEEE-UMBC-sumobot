@@ -84,6 +84,9 @@ const int16_t SCAN_SPEED     = 250;  // 360° scan
 const int16_t EVADE_SPEED    = 400;  // escape burst
 const int16_t TURN_SPEED     = 400;  // general turning
 
+// ===================== BUZZER VOLUME =============================
+const uint8_t BUZZER_VOLUME  = 15;   // 0–15 — applies to every sound
+
 // ============= ENCODER / PUSH-DETECTION SETTINGS =================
 //  While commanding forward at ATTACK_SPEED, the encoders
 //  normally return a large positive count every PUSH_CHECK_INTERVAL.
@@ -185,7 +188,7 @@ void loop()
 void emergencyStop()
 {
   motors.setSpeeds(0, 0);
-  buzzer.playNote(NOTE_C(3), 300, 15);
+  buzzer.playNote(NOTE_C(3), 300, BUZZER_VOLUME);
   ledYellow(0);
   ledRed(1);
   display.clear();
@@ -242,11 +245,11 @@ void doCountdownAndScan(bool scanCW)
 
     switch (i)
     {
-      case 5: buzzer.playNote(NOTE_C(4), 150, 12); break;
-      case 4: buzzer.playNote(NOTE_D(4), 150, 12); break;
-      case 3: buzzer.playNote(NOTE_E(4), 150, 12); break;
-      case 2: buzzer.playNote(NOTE_G(4), 150, 12); break;
-      case 1: buzzer.playNote(NOTE_A(4), 150, 12); break;
+      case 5: buzzer.playNote(NOTE_C(4), 150, BUZZER_VOLUME); break;
+      case 4: buzzer.playNote(NOTE_D(4), 150, BUZZER_VOLUME); break;
+      case 3: buzzer.playNote(NOTE_E(4), 150, BUZZER_VOLUME); break;
+      case 2: buzzer.playNote(NOTE_G(4), 150, BUZZER_VOLUME); break;
+      case 1: buzzer.playNote(NOTE_A(4), 150, BUZZER_VOLUME); break;
     }
     delay(1000);
   }
@@ -255,7 +258,7 @@ void doCountdownAndScan(bool scanCW)
   display.clear();
   display.gotoXY(2, 0);
   display.print(F("GO!"));
-  buzzer.playNote(NOTE_C(6), 300, 15);
+  buzzer.playNote(NOTE_C(6), 300, BUZZER_VOLUME);
   delay(300);
 
   // ── 360° scan (blocking spin) ──
@@ -292,10 +295,6 @@ void doCountdownAndScan(bool scanCW)
     // Compute degrees rotated
     uint32_t rotated = scanCW ? -turnAngle : turnAngle;
     int32_t degrees = ((int32_t)(rotated >> 16) * 360L) >> 16;
-
-    display.gotoXY(0, 1);
-    display.print(degrees);
-    display.print(F(" deg  "));
 
     // Full rotation complete (with 1s guard against gyro noise)
     if (millis() - scanStart > 1000 && degrees >= 350)
@@ -512,27 +511,6 @@ void handleAttack()
 }
 
 // =================================================================
-//  HELPER: transition into SEARCH state
-// =================================================================
-void transitionToAttack(bool opponentOnRight)
-{
-  lastSenseRight = opponentOnRight;
-  objectLastSeen = millis();
-
-  encoders.getCountsAndResetLeft();
-  encoders.getCountsAndResetRight();
-  lastPushCheck = millis();
-
-  currentState  = STATE_ATTACK;
-  stateStartTime = millis();
-
-  ledYellow(1);
-  buzzer.playNote(NOTE_C(6), 300, 15);   // high-pitch beep — target found
-  display.clear();
-  display.print(F("ATTACK!"));
-}
-
-// =================================================================
 //  HELPER: transition into ATTACK state
 // =================================================================
 void transitionToAttack(bool opponentOnRight)
@@ -548,7 +526,7 @@ void transitionToAttack(bool opponentOnRight)
   stateStartTime = millis();
 
   ledYellow(1);
-  buzzer.playNote(NOTE_C(6), 300, 15);   // high-pitch beep — target found
+  buzzer.playNote(NOTE_C(6), 300, BUZZER_VOLUME);   // high-pitch beep — target found
   display.clear();
   display.print(F("ATTACK!"));
 }
@@ -572,7 +550,7 @@ void transitionToSearch()
   stateStartTime = millis();
 
   ledYellow(0);
-  buzzer.playNote(NOTE_C(3), 400, 15);   // low-pitch beep — target lost
+  buzzer.playNote(NOTE_C(3), 400, BUZZER_VOLUME);   // low-pitch beep — target lost
   display.clear();
   display.print(F("SEARCH"));
 }
@@ -914,7 +892,7 @@ void handleTestMode()
         if (checkBeingPushed())
         {
           // Push detected! Beep and evade
-          buzzer.playNote(NOTE_A(5), 200, 15);
+          buzzer.playNote(NOTE_A(5), 200, BUZZER_VOLUME);
           testPushEvading = true;
           testEvadeStart  = millis();
           Serial.println(F("PUSH\t*** PUSH DETECTED — evading ***"));
