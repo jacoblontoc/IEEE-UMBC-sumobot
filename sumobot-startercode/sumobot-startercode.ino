@@ -1,7 +1,7 @@
 #include <Wire.h>
 #include <Zumo32U4.h>
 
-// HARDWARE OBJECTS 
+// HARDWARE OBJECTS
 Zumo32U4LCD display;
 Zumo32U4Motors motors;
 Zumo32U4ProximitySensors proxSensors;
@@ -11,67 +11,75 @@ Zumo32U4ButtonA buttonA;
 Zumo32U4ButtonB buttonB;
 Zumo32U4ButtonC buttonC;
 
-//  DYNAMIC FLOOR CALIBRATION
-//  CALIBRATION_SAMPLES  — readings averaged per sensor when A/C starts a match
-//  CALIBRATION_DELAY_MS — pause between samples during floor calibration
-//  BOUNDARY_TOLERANCE   — allowed deviation from baseline before boundary hit
-
+// DYNAMIC FLOOR CALIBRATION
 #define NUM_LINE_SENSORS 5
 
-const uint8_t CALIBRATION_SAMPLES = 30;
-const uint8_t CALIBRATION_DELAY_MS = 5;
-const uint16_t BOUNDARY_TOLERANCE = 350;
+const uint8_t  CALIBRATION_SAMPLES   = 30;
+const uint8_t  CALIBRATION_DELAY_MS  = 5;
+const uint16_t BOUNDARY_TOLERANCE    = 350;
 
 uint16_t lineSensorValues[NUM_LINE_SENSORS];
 uint16_t floorBaseline[NUM_LINE_SENSORS];
 bool floorCalibrated = false;
 
-// PROXIMITY THRESHOLDS 
-// Sensor returns 0–6.  Lower = more sensitive (detects farther away).
-const uint8_t PROX_SEARCH_THRESHOLD = 3; // used during scan / search / cross-ring
-const uint8_t PROX_ATTACK_THRESHOLD = 4; // used during attack (closer = real target)
+// PROXIMITY THRESHOLDS
+// OPT: unified to 3 — engage and hold target sooner in all modes
+const uint8_t PROX_SEARCH_THRESHOLD = 3;
+const uint8_t PROX_ATTACK_THRESHOLD = 3; // was 4 — lowered to lock on earlier
 
-// SPEED SETTINGS 
-const int16_t SEARCH_SPEED = 300; // slow — conserve position
-const int16_t ATTACK_SPEED = 400; // max — full ram
-const int16_t SCAN_SPEED = 400;   // 360° scan
-const int16_t EVADE_SPEED = 400;   // 360° scan
-const int16_t TURN_SPEED = 400;   // general turning
+// SPEED SETTINGS
+// OPT: SEARCH_SPEED raised to 400 — cover ring faster, engage sooner
+const int16_t SEARCH_SPEED = 400; // was 300
+const int16_t ATTACK_SPEED = 400;
+const int16_t SCAN_SPEED   = 400;
+const int16_t EVADE_SPEED  = 400;
+const int16_t TURN_SPEED   = 400;
 
-// BUZZER VOLUME 
-const uint8_t BUZZER_VOLUME = 9; // 0–15 — applies to every sound
+// BUZZER VOLUME
+const uint8_t BUZZER_VOLUME = 9;
 
+// SCAN / SEARCH TIMING
+// OPT: SCAN_TIMEOUT reduced — full spin takes <2s at this speed, 2500 wastes time
+// OPT: search legs tightened — denser sweep pattern
+const unsigned long SCAN_TIMEOUT       = 2000;  // was 2500
+const unsigned long CROSS_RING_TIME    = 1200;
+const unsigned long SEARCH_DRIVE_TIME  = 500;   // was 800
+const unsigned long SEARCH_TURN_TIME   = 300;   // was 400
+const unsigned long REACQUIRE_TIMEOUT  = 400;
 
-// SCAN / SEARCH TIMING 
-const unsigned long SCAN_TIMEOUT = 2500;     // ms for 360° spin
-const unsigned long CROSS_RING_TIME = 1200;  // ms driving to far side
-const unsigned long SEARCH_DRIVE_TIME = 800; // ms forward per leg
-const unsigned long SEARCH_TURN_TIME = 400;  // ms turning per leg
-const unsigned long REACQUIRE_TIMEOUT = 400; // ms to reacquire target
-
-// STATE MACHINE 
+// STATE MACHINE
+// OPT: added STATE_EVADE to replace blocking delay() calls in bounceOffBoundary()
 enum RobotState
 {
   STATE_IDLE,
   STATE_CROSS_RING,
   STATE_SEARCH,
-  STATE_ATTACK
+  STATE_ATTACK,
+  STATE_EVADE   // NEW — non-blocking boundary evasion
 };
 
 RobotState currentState = STATE_IDLE;
 unsigned long stateStartTime = 0;
 
-
 // Search pattern
-bool searchTurnDir = false; // false = right, true = left
+bool searchTurnDir = false;
 unsigned long searchLegStart = 0;
 bool searchDriving = true;
 
 // Attack / tracking
-bool lastSenseRight = true;       // last-known opponent side
-unsigned long objectLastSeen = 0; // millis() timestamp
+bool lastSenseRight = true;
+unsigned long objectLastSeen = 0;
 
+// OPT: Evade state — replaces blocking delay() in bounceOffBoundary()
+enum EvadePhase { EVADE_REVERSE, EVADE_TURN };
+EvadePhase evadePhase;
+int8_t evadeTurnDir;
+unsigned long evadePhaseStart;
+RobotState evadeReturnState; // which state to go to after evade completes
+
+// ──────────────────────────────────────────────────────────────
 //                         SETUP
+// ──────────────────────────────────────────────────────────────
 void setup()
 {
   Serial.begin(9600);
@@ -87,27 +95,24 @@ void setup()
   currentState = STATE_IDLE;
 }
 
+// ──────────────────────────────────────────────────────────────
 //                        MAIN LOOP
+// ──────────────────────────────────────────────────────────────
 void loop()
 {
   switch (currentState)
   {
-  case STATE_IDLE:
-    handleIdle();
-    break;
-  case STATE_CROSS_RING:
-    handleCrossRing();
-    break;
-  case STATE_SEARCH:
-    handleSearch();
-    break;
-  case STATE_ATTACK:
-    handleAttack();
-    break;
+  case STATE_IDLE:       handleIdle();      break;
+  case STATE_CROSS_RING: handleCrossRing(); break;
+  case STATE_SEARCH:     handleSearch();    break;
+  case STATE_ATTACK:     handleAttack();    break;
+  case STATE_EVADE:      handleEvade();     break;
   }
 }
 
-//  EMERGENCY STOP — returns to IDLE
+// ──────────────────────────────────────────────────────────────
+//  EMERGENCY STOP
+// ──────────────────────────────────────────────────────────────
 void emergencyStop()
 {
   motors.setSpeeds(0, 0);
@@ -121,9 +126,9 @@ void emergencyStop()
   currentState = STATE_IDLE;
 }
 
+// ──────────────────────────────────────────────────────────────
 //  FLOOR CALIBRATION
-//  Called BEFORE countdown starts. Robot must be sitting still on the arena
-//  floor (not on the tawara/boundary) when this runs.
+// ──────────────────────────────────────────────────────────────
 void calibrateFloor()
 {
   display.clear();
@@ -140,9 +145,7 @@ void calibrateFloor()
   {
     lineSensors.read(lineSensorValues);
     for (uint8_t index = 0; index < NUM_LINE_SENSORS; index++)
-    {
       sums[index] += lineSensorValues[index];
-    }
     delay(CALIBRATION_DELAY_MS);
   }
 
@@ -150,10 +153,8 @@ void calibrateFloor()
   for (uint8_t index = 0; index < NUM_LINE_SENSORS; index++)
   {
     floorBaseline[index] = (uint16_t)(sums[index] / CALIBRATION_SAMPLES);
-    Serial.print(F("S"));
-    Serial.print(index);
-    Serial.print(F("="));
-    Serial.print(floorBaseline[index]);
+    Serial.print(F("S")); Serial.print(index);
+    Serial.print(F("=")); Serial.print(floorBaseline[index]);
     if (index < NUM_LINE_SENSORS - 1) Serial.print(F("  "));
   }
   Serial.println();
@@ -162,7 +163,6 @@ void calibrateFloor()
 
   floorCalibrated = true;
 
-  // Show centre-sensor baseline on LCD as a quick sanity check
   display.clear();
   display.print(F("CAL OK"));
   display.gotoXY(0, 1);
@@ -171,36 +171,32 @@ void calibrateFloor()
   delay(500);
 }
 
-//  STATE: IDLE — waiting for button press
-//    A = 5-second countdown + CCW scan, then fight
-//    B = emergency stop
-//    C = 5-second countdown + CW scan, then fight
+// ──────────────────────────────────────────────────────────────
+//  STATE: IDLE
+// ──────────────────────────────────────────────────────────────
 void handleIdle()
 {
   if (buttonA.getSingleDebouncedPress())
   {
     ledRed(0);
-    calibrateFloor();          // calibrate BEFORE countdown
-    doCountdownAndScan(false); // scan left (CCW)
+    calibrateFloor();
+    doCountdownAndScan(false); // CCW
     currentState = STATE_CROSS_RING;
     stateStartTime = millis();
   }
   else if (buttonC.getSingleDebouncedPress())
   {
     ledRed(0);
-    calibrateFloor();          // calibrate BEFORE countdown
-    doCountdownAndScan(true);  // scan right (CW)
+    calibrateFloor();
+    doCountdownAndScan(true);  // CW
     currentState = STATE_CROSS_RING;
     stateStartTime = millis();
   }
 }
 
-//  HELPER: blocking 5-second countdown + 360° scan
-//  Called from handleIdle() AFTER calibrateFloor() completes.
-//  scanCW: true = spin right (CW), false = spin left (CCW)
-//  If opponent is detected during the scan, transitions directly
-//  to ATTACK and returns; otherwise returns to let caller set
-//  STATE_CROSS_RING.
+// ──────────────────────────────────────────────────────────────
+//  HELPER: 5-second countdown + 360° scan
+// ──────────────────────────────────────────────────────────────
 void doCountdownAndScan(bool scanCW)
 {
   unsigned long countdownStart = millis();
@@ -209,16 +205,12 @@ void doCountdownAndScan(bool scanCW)
   while (true)
   {
     unsigned long elapsed = millis() - countdownStart;
-    if (elapsed >= 5000)
-    {
-      break;
-    }
+    if (elapsed >= 5000) break;
 
     int remaining = 5 - (int)(elapsed / 1000);
     if (remaining != lastAnnouncedSecond)
     {
       lastAnnouncedSecond = remaining;
-
       display.clear();
       display.gotoXY(3, 0);
       display.print(remaining);
@@ -227,32 +219,20 @@ void doCountdownAndScan(bool scanCW)
 
       switch (remaining)
       {
-      case 5:
-        buzzer.playNote(NOTE_C(4), 150, BUZZER_VOLUME);
-        break;
-      case 4:
-        buzzer.playNote(NOTE_D(4), 150, BUZZER_VOLUME);
-        break;
-      case 3:
-        buzzer.playNote(NOTE_E(4), 150, BUZZER_VOLUME);
-        break;
-      case 2:
-        buzzer.playNote(NOTE_G(4), 150, BUZZER_VOLUME);
-        break;
-      case 1:
-        buzzer.playNote(NOTE_A(4), 150, BUZZER_VOLUME);
-        break;
+      case 5: buzzer.playNote(NOTE_C(4), 150, BUZZER_VOLUME); break;
+      case 4: buzzer.playNote(NOTE_D(4), 150, BUZZER_VOLUME); break;
+      case 3: buzzer.playNote(NOTE_E(4), 150, BUZZER_VOLUME); break;
+      case 2: buzzer.playNote(NOTE_G(4), 150, BUZZER_VOLUME); break;
+      case 1: buzzer.playNote(NOTE_A(4), 150, BUZZER_VOLUME); break;
       }
     }
   }
 
-  // GO! 
   display.clear();
   display.gotoXY(2, 0);
   display.print(F("GO!"));
   buzzer.playNote(NOTE_C(6), 300, BUZZER_VOLUME);
 
-  // 360° scan (blocking spin)
   display.clear();
   display.print(F("SCANNING"));
 
@@ -265,7 +245,6 @@ void doCountdownAndScan(bool scanCW)
     else
       motors.setSpeeds(-SCAN_SPEED, SCAN_SPEED);
 
-    // Check for opponent while spinning
     proxSensors.read();
     uint8_t lv = proxSensors.countsFrontWithLeftLeds();
     uint8_t rv = proxSensors.countsFrontWithRightLeds();
@@ -274,9 +253,10 @@ void doCountdownAndScan(bool scanCW)
     {
       motors.setSpeeds(0, 0);
       transitionToAttack(rv >= lv);
-      return; // go straight to ATTACK — caller's CROSS_RING set is skipped
+      return;
     }
 
+    // OPT: SCAN_TIMEOUT reduced to 2000ms — full spin done well before this
     if (millis() - scanStart >= SCAN_TIMEOUT)
     {
       motors.setSpeeds(0, 0);
@@ -287,17 +267,13 @@ void doCountdownAndScan(bool scanCW)
   }
 }
 
-//  STATE: CROSS_RING — drive to the far side of the 30″ dohyo
+// ──────────────────────────────────────────────────────────────
+//  STATE: CROSS_RING
+// ──────────────────────────────────────────────────────────────
 void handleCrossRing()
 {
-  // B button = emergency stop 
-  if (buttonB.getSingleDebouncedPress())
-  {
-    emergencyStop();
-    return;
-  }
+  if (buttonB.getSingleDebouncedPress()) { emergencyStop(); return; }
 
-  // Always scan for opponent while driving 
   proxSensors.read();
   uint8_t lv = proxSensors.countsFrontWithLeftLeds();
   uint8_t rv = proxSensors.countsFrontWithRightLeds();
@@ -311,35 +287,25 @@ void handleCrossRing()
 
   if (checkBoundary())
   {
-    bounceOffBoundary();
-    transitionToSearch();
+    transitionToEvade(STATE_SEARCH);
     return;
   }
 
-
-  // Drive forward at search speed 
   display.gotoXY(0, 0);
   display.print(F("CROSSING"));
   motors.setSpeeds(SEARCH_SPEED, SEARCH_SPEED);
 
-  //  Timeout → should have crossed by now, begin search 
   if (millis() - stateStartTime > CROSS_RING_TIME)
-  {
     transitionToSearch();
-  }
 }
 
-//  STATE: SEARCH — fuzzy bouncing search pattern
+// ──────────────────────────────────────────────────────────────
+//  STATE: SEARCH
+// ──────────────────────────────────────────────────────────────
 void handleSearch()
 {
-  // B button = emergency stop
-  if (buttonB.getSingleDebouncedPress())
-  {
-    emergencyStop();
-    return;
-  }
+  if (buttonB.getSingleDebouncedPress()) { emergencyStop(); return; }
 
-  // Continuously scan for opponent
   proxSensors.read();
   uint8_t lv = proxSensors.countsFrontWithLeftLeds();
   uint8_t rv = proxSensors.countsFrontWithRightLeds();
@@ -353,15 +319,10 @@ void handleSearch()
 
   if (checkBoundary())
   {
-    bounceOffBoundary();
-    display.clear();
-    display.print(F("SEARCH"));
-    searchLegStart = millis();
-    searchDriving = true;
+    transitionToEvade(STATE_SEARCH);
     return;
   }
 
-  // Alternating drive / turn legs 
   unsigned long legElapsed = millis() - searchLegStart;
 
   if (searchDriving)
@@ -375,59 +336,50 @@ void handleSearch()
   }
   else
   {
-    // Turn in the current search direction
     if (searchTurnDir)
-      motors.setSpeeds(-TURN_SPEED, TURN_SPEED); // left
+      motors.setSpeeds(-TURN_SPEED, TURN_SPEED);
     else
-      motors.setSpeeds(TURN_SPEED, -TURN_SPEED); // right
+      motors.setSpeeds(TURN_SPEED, -TURN_SPEED);
 
     if (legElapsed > SEARCH_TURN_TIME)
     {
       searchDriving = true;
-      searchTurnDir = !searchTurnDir; // alternate next time
+      searchTurnDir = !searchTurnDir;
       searchLegStart = millis();
     }
   }
 
-  // LCD 
   display.gotoXY(0, 1);
   display.print(searchDriving ? F(">>FWD ") : F(">>TRN "));
 }
 
-//  STATE: ATTACK — charge the opponent!
-
+// ──────────────────────────────────────────────────────────────
+//  STATE: ATTACK
+//
+//  OPT 1: Opponent check comes BEFORE boundary check.
+//         If we can see the opponent we keep pushing even if
+//         our own sensors are over the tawara — we may be
+//         about to shove them out. Only bounce when we've lost
+//         sight near the edge.
+//
+//  OPT 2: Reacquire by curving forward rather than spinning
+//         in place — covers more ground and tracks a moving
+//         opponent better.
+// ──────────────────────────────────────────────────────────────
 void handleAttack()
 {
-  // ── B button = emergency stop ──
-  if (buttonB.getSingleDebouncedPress())
-  {
-    emergencyStop();
-    return;
-  }
+  if (buttonB.getSingleDebouncedPress()) { emergencyStop(); return; }
 
   proxSensors.read();
   uint8_t lv = proxSensors.countsFrontWithLeftLeds();
   uint8_t rv = proxSensors.countsFrontWithRightLeds();
   bool seen = (lv >= PROX_ATTACK_THRESHOLD) || (rv >= PROX_ATTACK_THRESHOLD);
 
-  if (checkBoundary())
+  // OPT: only evade boundary when we've LOST the opponent.
+  // If we can still see them, keep pushing — this is the win moment.
+  if (checkBoundary() && !seen)
   {
-    bounceOffBoundary();
-
-    proxSensors.read();
-    lv = proxSensors.countsFrontWithLeftLeds();
-    rv = proxSensors.countsFrontWithRightLeds();
-    if (lv >= PROX_ATTACK_THRESHOLD || rv >= PROX_ATTACK_THRESHOLD)
-    {
-      lastSenseRight = (rv >= lv);
-      objectLastSeen = millis();
-      display.clear();
-      display.print(F("ATTACK!"));
-    }
-    else
-    {
-      transitionToSearch();
-    }
+    transitionToEvade(STATE_SEARCH);
     return;
   }
 
@@ -438,21 +390,18 @@ void handleAttack()
 
     if (rv > lv)
     {
-      // Object biased right — curve right
       int16_t adj = map(rv - lv, 0, 6, 0, 300);
       motors.setSpeeds(ATTACK_SPEED, ATTACK_SPEED - adj);
       lastSenseRight = true;
     }
     else if (lv > rv)
     {
-      // Object biased left — curve left
       int16_t adj = map(lv - rv, 0, 6, 0, 300);
       motors.setSpeeds(ATTACK_SPEED - adj, ATTACK_SPEED);
       lastSenseRight = false;
     }
     else
     {
-      // Dead-centre — full charge!
       motors.setSpeeds(ATTACK_SPEED, ATTACK_SPEED);
     }
 
@@ -464,68 +413,134 @@ void handleAttack()
   }
   else
   {
-    // Lost sight 
+    // OPT: curve forward toward last known side instead of spinning in place.
+    // Covers more ring area and tracks a moving opponent far better.
     ledYellow(0);
-
     display.gotoXY(0, 1);
     display.print(F("LOST    "));
 
     if (lastSenseRight)
-      motors.setSpeeds(TURN_SPEED, -TURN_SPEED); // turn right
+      motors.setSpeeds(ATTACK_SPEED, ATTACK_SPEED / 3); // curve right, still moving
     else
-      motors.setSpeeds(-TURN_SPEED, TURN_SPEED); // turn left
+      motors.setSpeeds(ATTACK_SPEED / 3, ATTACK_SPEED); // curve left, still moving
 
-    // Give up after REACQUIRE_TIMEOUT and switch to search
     if (millis() - objectLastSeen > REACQUIRE_TIMEOUT)
-    {
       transitionToSearch();
+  }
+}
+
+// ──────────────────────────────────────────────────────────────
+//  STATE: EVADE  (replaces blocking bounceOffBoundary())
+//
+//  OPT: All delays replaced with millis()-based timing so the
+//       robot stays sensor-aware throughout the entire evade.
+//       Reverse trimmed 400ms → 250ms. Turn window tightened.
+//       After evade completes, returns to evadeReturnState.
+// ──────────────────────────────────────────────────────────────
+void handleEvade()
+{
+  if (buttonB.getSingleDebouncedPress()) { emergencyStop(); return; }
+
+  // If the opponent appears during evasion, abort and attack immediately
+  proxSensors.read();
+  uint8_t lv = proxSensors.countsFrontWithLeftLeds();
+  uint8_t rv = proxSensors.countsFrontWithRightLeds();
+
+  if (lv >= PROX_ATTACK_THRESHOLD || rv >= PROX_ATTACK_THRESHOLD)
+  {
+    motors.setSpeeds(0, 0);
+    ledRed(0);
+    transitionToAttack(rv >= lv);
+    return;
+  }
+
+  unsigned long elapsed = millis() - evadePhaseStart;
+
+  if (evadePhase == EVADE_REVERSE)
+  {
+    motors.setSpeeds(-EVADE_SPEED, -EVADE_SPEED);
+    if (elapsed > 250) // was 400ms
+    {
+      evadePhase = EVADE_TURN;
+      evadePhaseStart = millis();
+      if (evadeTurnDir <= 0) // left hit or centre → turn right
+        motors.setSpeeds(TURN_SPEED, -TURN_SPEED);
+      else                   // right hit → turn left
+        motors.setSpeeds(-TURN_SPEED, TURN_SPEED);
+    }
+  }
+  else // EVADE_TURN
+  {
+    // OPT: shorter, randomised turn — was 250+random(200), now tighter
+    unsigned long turnTime = 200 + random(150);
+    if (elapsed > turnTime)
+    {
+      motors.setSpeeds(0, 0);
+      ledRed(0);
+      if (evadeReturnState == STATE_SEARCH)
+        transitionToSearch();
+      else
+      {
+        currentState = evadeReturnState;
+        stateStartTime = millis();
+      }
     }
   }
 }
 
-//  HELPER: transition into ATTACK state
+// ──────────────────────────────────────────────────────────────
+//  TRANSITION HELPERS
+// ──────────────────────────────────────────────────────────────
 void transitionToAttack(bool opponentOnRight)
 {
   lastSenseRight = opponentOnRight;
   objectLastSeen = millis();
-
   currentState = STATE_ATTACK;
   stateStartTime = millis();
-
   ledYellow(1);
-  buzzer.playNote(NOTE_C(6), 300, BUZZER_VOLUME); // high-pitch beep — target found
+  buzzer.playNote(NOTE_C(6), 300, BUZZER_VOLUME);
   display.clear();
   display.print(F("ATTACK!"));
 }
 
-//  HELPER: transition into SEARCH state
 void transitionToSearch()
 {
   motors.setSpeeds(0, 0);
-
   searchDriving = true;
-  searchTurnDir = !searchTurnDir; // vary direction each time
+  searchTurnDir = !searchTurnDir;
   searchLegStart = millis();
-
   currentState = STATE_SEARCH;
   stateStartTime = millis();
-
   ledYellow(0);
-  buzzer.playNote(NOTE_C(3), 400, BUZZER_VOLUME); // low-pitch beep — target lost
+  buzzer.playNote(NOTE_C(3), 400, BUZZER_VOLUME);
   display.clear();
   display.print(F("SEARCH"));
 }
 
-//  BOUNDARY DETECTION
+// OPT: new helper — begins non-blocking evade, remembers where to return
+void transitionToEvade(RobotState returnTo)
+{
+  evadeTurnDir = getBoundarySide();
+  evadePhase = EVADE_REVERSE;
+  evadePhaseStart = millis();
+  evadeReturnState = returnTo;
+  currentState = STATE_EVADE;
+  motors.setSpeeds(-EVADE_SPEED, -EVADE_SPEED);
+  ledRed(1);
+  buzzer.playNote(NOTE_A(5), 80, BUZZER_VOLUME); // shorter beep than before
+  display.clear();
+  display.print(F("EVADE"));
+}
 
-// Debug counter to throttle serial output (prints every N calls)
+// ──────────────────────────────────────────────────────────────
+//  BOUNDARY DETECTION
+// ──────────────────────────────────────────────────────────────
 unsigned long lastBoundaryDebug = 0;
-const unsigned long BOUNDARY_DEBUG_INTERVAL = 200; // ms between debug prints
+const unsigned long BOUNDARY_DEBUG_INTERVAL = 200;
 
 bool checkBoundary()
 {
-  if (!floorCalibrated)
-    return false;
+  if (!floorCalibrated) return false;
 
   lineSensors.read(lineSensorValues);
 
@@ -534,52 +549,41 @@ bool checkBoundary()
   uint8_t triggerSensor = 255;
   uint16_t triggerDev = 0;
 
-  // Check all sensors first
   for (uint8_t i = 0; i < NUM_LINE_SENSORS; i++)
   {
-    uint16_t baseline = floorBaseline[i];
-    uint16_t reading = lineSensorValues[i];
-    uint16_t deviation = (reading > baseline)
-                             ? (reading - baseline)
-                             : (baseline - reading);
+    uint16_t baseline  = floorBaseline[i];
+    uint16_t reading   = lineSensorValues[i];
+    uint16_t deviation = (reading > baseline) ? (reading - baseline) : (baseline - reading);
     if (deviation > BOUNDARY_TOLERANCE && !boundaryHit)
     {
-      boundaryHit = true;
-      triggerSensor = i;
-      triggerDev = deviation;
+      boundaryHit    = true;
+      triggerSensor  = i;
+      triggerDev     = deviation;
     }
   }
 
-  // Print debug info periodically OR when boundary hit
   if (shouldPrint || boundaryHit)
   {
     lastBoundaryDebug = millis();
-    
     Serial.print(F("LINE: "));
     for (uint8_t i = 0; i < NUM_LINE_SENSORS; i++)
     {
       uint16_t baseline = floorBaseline[i];
-      uint16_t reading = lineSensorValues[i];
-      int16_t diff = (int16_t)reading - (int16_t)baseline;
-      
-      Serial.print(F("S"));
-      Serial.print(i);
-      Serial.print(F(":"));
-      Serial.print(reading);
+      uint16_t reading  = lineSensorValues[i];
+      int16_t  diff     = (int16_t)reading - (int16_t)baseline;
+      Serial.print(F("S")); Serial.print(i);
+      Serial.print(F(":")); Serial.print(reading);
       Serial.print(F("("));
       if (diff >= 0) Serial.print(F("+"));
       Serial.print(diff);
       Serial.print(F(") "));
     }
-    
     if (boundaryHit)
     {
       Serial.print(F(" >>> BOUNDARY! S"));
       Serial.print(triggerSensor);
-      Serial.print(F(" dev="));
-      Serial.print(triggerDev);
-      Serial.print(F(" > tol="));
-      Serial.print(BOUNDARY_TOLERANCE);
+      Serial.print(F(" dev="));  Serial.print(triggerDev);
+      Serial.print(F(" > tol=")); Serial.print(BOUNDARY_TOLERANCE);
     }
     Serial.println();
   }
@@ -587,66 +591,29 @@ bool checkBoundary()
   return boundaryHit;
 }
 
-// Returns which side of the robot hit the boundary.
-//   -1 = left,  0 = centre / both,  1 = right
 int8_t getBoundarySide()
 {
-  bool leftHit = false;
+  bool leftHit  = false;
   bool rightHit = false;
 
   for (uint8_t i = 0; i < NUM_LINE_SENSORS; i++)
   {
-    uint16_t baseline = floorBaseline[i];
-    uint16_t reading = lineSensorValues[i];
-    uint16_t deviation = (reading > baseline)
-                             ? (reading - baseline)
-                             : (baseline - reading);
+    uint16_t baseline  = floorBaseline[i];
+    uint16_t reading   = lineSensorValues[i];
+    uint16_t deviation = (reading > baseline) ? (reading - baseline) : (baseline - reading);
     if (deviation > BOUNDARY_TOLERANCE)
     {
-      if (i <= 1)
-        leftHit = true; // sensors 0,1
-      if (i >= 3)
-        rightHit = true; // sensors 3,4
-      if (i == 2)
-      {
-        leftHit = true;
-        rightHit = true;
-      }
+      if (i <= 1) leftHit  = true;
+      if (i >= 3) rightHit = true;
+      if (i == 2) { leftHit = true; rightHit = true; }
     }
   }
 
-  if (leftHit && rightHit)
-    return 0;
-  if (leftHit)
-    return -1;
-  if (rightHit)
-    return 1;
+  if (leftHit && rightHit) return  0;
+  if (leftHit)             return -1;
+  if (rightHit)            return  1;
   return 0;
 }
 
-// Back up and turn away from the boundary.
-void bounceOffBoundary()
-{
-  int8_t side = getBoundarySide();
-
-  // Visual + audible alert
-  ledRed(1);
-  buzzer.playNote(NOTE_A(5), 200, BUZZER_VOLUME);
-  display.clear();
-  display.print(F("BOUNDARY"));
-
-  // Reverse briefly
-  motors.setSpeeds(-EVADE_SPEED, -EVADE_SPEED);
-  delay(400);
-
-  // Turn away from the boundary edge
-  if (side <= 0) // left or centre → turn right
-    motors.setSpeeds(TURN_SPEED, -TURN_SPEED);
-  else // right → turn left
-    motors.setSpeeds(-TURN_SPEED, TURN_SPEED);
-
-  delay(250 + random(200)); // randomised to vary the search path
-
-  motors.setSpeeds(0, 0);
-  ledRed(0);
-}
+// NOTE: bounceOffBoundary() removed — replaced entirely by transitionToEvade()
+//       and handleEvade(). No more blocking delay() calls.
