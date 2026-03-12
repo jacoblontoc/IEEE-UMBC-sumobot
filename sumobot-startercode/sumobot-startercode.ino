@@ -7,7 +7,6 @@ Zumo32U4Motors motors;
 Zumo32U4ProximitySensors proxSensors;
 Zumo32U4LineSensors lineSensors;
 Zumo32U4Buzzer buzzer;
-Zumo32U4Encoders encoders;
 Zumo32U4ButtonA buttonA;
 Zumo32U4ButtonB buttonB;
 Zumo32U4ButtonC buttonC;
@@ -21,7 +20,7 @@ Zumo32U4ButtonC buttonC;
 
 const uint8_t CALIBRATION_SAMPLES = 30;
 const uint8_t CALIBRATION_DELAY_MS = 5;
-const uint16_t BOUNDARY_TOLERANCE = 200;
+const uint16_t BOUNDARY_TOLERANCE = 350;
 
 uint16_t lineSensorValues[NUM_LINE_SENSORS];
 uint16_t floorBaseline[NUM_LINE_SENSORS];
@@ -36,7 +35,7 @@ const uint8_t PROX_ATTACK_THRESHOLD = 4; // used during attack (closer = real ta
 const int16_t SEARCH_SPEED = 300; // slow — conserve position
 const int16_t ATTACK_SPEED = 400; // max — full ram
 const int16_t SCAN_SPEED = 400;   // 360° scan
-const int16_t EVADE_SPEED = 400;  // escape burst
+const int16_t EVADE_SPEED = 400;   // 360° scan
 const int16_t TURN_SPEED = 400;   // general turning
 
 // BUZZER VOLUME 
@@ -81,9 +80,9 @@ void setup()
   proxSensors.initFrontSensor();
 
   display.clear();
-  display.print(F("A=CCW B=Stp"));
+  display.print(F("CECE up!"));
   display.gotoXY(0, 1);
-  display.print(F("C=CW"));
+  display.print(F(" A|B|C"));
 
   currentState = STATE_IDLE;
 }
@@ -118,15 +117,22 @@ void emergencyStop()
   display.clear();
   display.print(F("STOPPED"));
   display.gotoXY(0, 1);
-  display.print(F("A=CCW C=CW"));
+  display.print(F(" A|B|C"));
   currentState = STATE_IDLE;
 }
 
 //  FLOOR CALIBRATION
+//  Called BEFORE countdown starts. Robot must be sitting still on the arena
+//  floor (not on the tawara/boundary) when this runs.
 void calibrateFloor()
 {
   display.clear();
   display.print(F("CAL..."));
+
+  Serial.println(F("\n===== FLOOR CALIBRATION ====="));
+  Serial.print(F("Sampling "));
+  Serial.print(CALIBRATION_SAMPLES);
+  Serial.println(F(" times..."));
 
   uint32_t sums[NUM_LINE_SENSORS] = {0, 0, 0, 0, 0};
 
@@ -140,15 +146,29 @@ void calibrateFloor()
     delay(CALIBRATION_DELAY_MS);
   }
 
+  Serial.print(F("Baseline -> "));
   for (uint8_t index = 0; index < NUM_LINE_SENSORS; index++)
   {
     floorBaseline[index] = (uint16_t)(sums[index] / CALIBRATION_SAMPLES);
+    Serial.print(F("S"));
+    Serial.print(index);
+    Serial.print(F("="));
+    Serial.print(floorBaseline[index]);
+    if (index < NUM_LINE_SENSORS - 1) Serial.print(F("  "));
   }
+  Serial.println();
+  Serial.print(F("Tolerance: +/-"));
+  Serial.println(BOUNDARY_TOLERANCE);
 
   floorCalibrated = true;
 
+  // Show centre-sensor baseline on LCD as a quick sanity check
+  display.clear();
+  display.print(F("CAL OK"));
   display.gotoXY(0, 1);
-  display.print(F("OK"));
+  display.print(F("C="));
+  display.print(floorBaseline[2]);
+  delay(500);
 }
 
 //  STATE: IDLE — waiting for button press
@@ -160,6 +180,7 @@ void handleIdle()
   if (buttonA.getSingleDebouncedPress())
   {
     ledRed(0);
+    calibrateFloor();          // calibrate BEFORE countdown
     doCountdownAndScan(false); // scan left (CCW)
     currentState = STATE_CROSS_RING;
     stateStartTime = millis();
@@ -167,15 +188,15 @@ void handleIdle()
   else if (buttonC.getSingleDebouncedPress())
   {
     ledRed(0);
-    doCountdownAndScan(true); // scan right (CW)
+    calibrateFloor();          // calibrate BEFORE countdown
+    doCountdownAndScan(true);  // scan right (CW)
     currentState = STATE_CROSS_RING;
     stateStartTime = millis();
   }
 }
 
 //  HELPER: blocking 5-second countdown + 360° scan
-//  Called from handleIdle() when A or C is pressed.
-//  Floor calibration is included inside the same 5-second delay.
+//  Called from handleIdle() AFTER calibrateFloor() completes.
 //  scanCW: true = spin right (CW), false = spin left (CCW)
 //  If opponent is detected during the scan, transitions directly
 //  to ATTACK and returns; otherwise returns to let caller set
@@ -217,7 +238,6 @@ void doCountdownAndScan(bool scanCW)
         break;
       case 2:
         buzzer.playNote(NOTE_G(4), 150, BUZZER_VOLUME);
-        calibrateFloor();   // calibrate during second 2
         break;
       case 1:
         buzzer.playNote(NOTE_A(4), 150, BUZZER_VOLUME);
@@ -233,9 +253,6 @@ void doCountdownAndScan(bool scanCW)
   buzzer.playNote(NOTE_C(6), 300, BUZZER_VOLUME);
 
   // 360° scan (blocking spin)
-  encoders.getCountsAndResetLeft();
-  encoders.getCountsAndResetRight();
-
   display.clear();
   display.print(F("SCANNING"));
 
@@ -301,6 +318,8 @@ void handleCrossRing()
 
 
   // Drive forward at search speed 
+  display.gotoXY(0, 0);
+  display.print(F("CROSSING"));
   motors.setSpeeds(SEARCH_SPEED, SEARCH_SPEED);
 
   //  Timeout → should have crossed by now, begin search 
@@ -335,6 +354,8 @@ void handleSearch()
   if (checkBoundary())
   {
     bounceOffBoundary();
+    display.clear();
+    display.print(F("SEARCH"));
     searchLegStart = millis();
     searchDriving = true;
     return;
@@ -400,6 +421,8 @@ void handleAttack()
     {
       lastSenseRight = (rv >= lv);
       objectLastSeen = millis();
+      display.clear();
+      display.print(F("ATTACK!"));
     }
     else
     {
@@ -444,6 +467,9 @@ void handleAttack()
     // Lost sight 
     ledYellow(0);
 
+    display.gotoXY(0, 1);
+    display.print(F("LOST    "));
+
     if (lastSenseRight)
       motors.setSpeeds(TURN_SPEED, -TURN_SPEED); // turn right
     else
@@ -463,9 +489,6 @@ void transitionToAttack(bool opponentOnRight)
   lastSenseRight = opponentOnRight;
   objectLastSeen = millis();
 
-  encoders.getCountsAndResetLeft();
-  encoders.getCountsAndResetRight();
-
   currentState = STATE_ATTACK;
   stateStartTime = millis();
 
@@ -484,9 +507,6 @@ void transitionToSearch()
   searchTurnDir = !searchTurnDir; // vary direction each time
   searchLegStart = millis();
 
-  encoders.getCountsAndResetLeft();
-  encoders.getCountsAndResetRight();
-
   currentState = STATE_SEARCH;
   stateStartTime = millis();
 
@@ -498,6 +518,10 @@ void transitionToSearch()
 
 //  BOUNDARY DETECTION
 
+// Debug counter to throttle serial output (prints every N calls)
+unsigned long lastBoundaryDebug = 0;
+const unsigned long BOUNDARY_DEBUG_INTERVAL = 200; // ms between debug prints
+
 bool checkBoundary()
 {
   if (!floorCalibrated)
@@ -505,6 +529,12 @@ bool checkBoundary()
 
   lineSensors.read(lineSensorValues);
 
+  bool shouldPrint = (millis() - lastBoundaryDebug >= BOUNDARY_DEBUG_INTERVAL);
+  bool boundaryHit = false;
+  uint8_t triggerSensor = 255;
+  uint16_t triggerDev = 0;
+
+  // Check all sensors first
   for (uint8_t i = 0; i < NUM_LINE_SENSORS; i++)
   {
     uint16_t baseline = floorBaseline[i];
@@ -512,10 +542,49 @@ bool checkBoundary()
     uint16_t deviation = (reading > baseline)
                              ? (reading - baseline)
                              : (baseline - reading);
-    if (deviation > BOUNDARY_TOLERANCE)
-      return true;
+    if (deviation > BOUNDARY_TOLERANCE && !boundaryHit)
+    {
+      boundaryHit = true;
+      triggerSensor = i;
+      triggerDev = deviation;
+    }
   }
-  return false;
+
+  // Print debug info periodically OR when boundary hit
+  if (shouldPrint || boundaryHit)
+  {
+    lastBoundaryDebug = millis();
+    
+    Serial.print(F("LINE: "));
+    for (uint8_t i = 0; i < NUM_LINE_SENSORS; i++)
+    {
+      uint16_t baseline = floorBaseline[i];
+      uint16_t reading = lineSensorValues[i];
+      int16_t diff = (int16_t)reading - (int16_t)baseline;
+      
+      Serial.print(F("S"));
+      Serial.print(i);
+      Serial.print(F(":"));
+      Serial.print(reading);
+      Serial.print(F("("));
+      if (diff >= 0) Serial.print(F("+"));
+      Serial.print(diff);
+      Serial.print(F(") "));
+    }
+    
+    if (boundaryHit)
+    {
+      Serial.print(F(" >>> BOUNDARY! S"));
+      Serial.print(triggerSensor);
+      Serial.print(F(" dev="));
+      Serial.print(triggerDev);
+      Serial.print(F(" > tol="));
+      Serial.print(BOUNDARY_TOLERANCE);
+    }
+    Serial.println();
+  }
+
+  return boundaryHit;
 }
 
 // Returns which side of the robot hit the boundary.
@@ -560,6 +629,12 @@ void bounceOffBoundary()
 {
   int8_t side = getBoundarySide();
 
+  // Visual + audible alert
+  ledRed(1);
+  buzzer.playNote(NOTE_A(5), 200, BUZZER_VOLUME);
+  display.clear();
+  display.print(F("BOUNDARY"));
+
   // Reverse briefly
   motors.setSpeeds(-EVADE_SPEED, -EVADE_SPEED);
   delay(400);
@@ -573,4 +648,5 @@ void bounceOffBoundary()
   delay(250 + random(200)); // randomised to vary the search path
 
   motors.setSpeeds(0, 0);
+  ledRed(0);
 }
