@@ -25,7 +25,7 @@ const bool INVERT_MOTORS = false;
 
 const uint8_t CALIBRATION_SAMPLES = 30;
 const uint8_t CALIBRATION_DELAY_MS = 5;
-const uint16_t BOUNDARY_TOLERANCE = 350;
+const uint16_t BOUNDARY_TOLERANCE = 400;
 
 uint16_t lineSensorValues[NUM_LINE_SENSORS];
 uint16_t floorBaseline[NUM_LINE_SENSORS];
@@ -35,13 +35,14 @@ bool floorCalibrated = false;
 // Sensor returns 0–6.  Lower = more sensitive (detects farther away).
 const uint8_t PROX_SEARCH_THRESHOLD = 3; // used during scan / search / cross-ring
 const uint8_t PROX_ATTACK_THRESHOLD = 4; // used during attack (closer = real target)
+const uint8_t PROX_LOCK_THRESHOLD = 2;   // lower threshold used to keep lock once attacking
 
 // SPEED SETTINGS
-const int16_t SEARCH_SPEED = 300; // slow — conserve position
+const int16_t SEARCH_SPEED = 280; // slow — conserve position
 const int16_t ATTACK_SPEED = 400; // max — full ram
-const int16_t SCAN_SPEED = 400;   // 360° scan
+const int16_t SCAN_SPEED = 350;   // 360° scan
 const int16_t EVADE_SPEED = 400;  // 360° scan
-const int16_t TURN_SPEED = 400;   // general turning
+const int16_t TURN_SPEED = 280;   // general turning
 
 // BUZZER VOLUME
 const uint8_t BUZZER_VOLUME = 9; // 0–15 — applies to every sound
@@ -49,9 +50,8 @@ const uint8_t BUZZER_VOLUME = 9; // 0–15 — applies to every sound
 // SCAN / SEARCH TIMING
 const unsigned long SCAN_TIMEOUT = 2500;     // ms for 360° spin
 const unsigned long CROSS_RING_TIME = 1200;  // ms driving to far side
-const unsigned long SEARCH_DRIVE_TIME = 800; // ms forward per leg
-const unsigned long SEARCH_TURN_TIME = 400;  // ms turning per leg
-const unsigned long REACQUIRE_TIMEOUT = 400; // ms to reacquire target
+const unsigned long REACQUIRE_TIMEOUT = 900; // ms to reacquire target before giving up
+const unsigned long LOCK_HOLD_TIME = 220;    // ms weak signal is still considered a lock
 
 // STATE MACHINE
 enum RobotState
@@ -68,7 +68,6 @@ unsigned long stateStartTime = 0;
 // Search pattern
 bool searchTurnDir = false; // false = right, true = left
 unsigned long searchLegStart = 0;
-bool searchDriving = true;
 
 // Attack / tracking
 bool lastSenseRight = true;       // last-known opponent side
@@ -134,7 +133,7 @@ void emergencyStop()
 }
 
 //  FLOOR CALIBRATION
-//  Called BEFORE countdown starts. Robot must be sitting still on the arena
+//  Called when A/C starts a match. Robot must be sitting still on the arena
 //  floor (not on the tawara/boundary) when this runs.
 void calibrateFloor()
 {
@@ -181,7 +180,6 @@ void calibrateFloor()
   display.gotoXY(0, 1);
   display.print(F("C="));
   display.print(floorBaseline[2]);
-  delay(500);
 }
 
 //  STATE: IDLE — waiting for button press
@@ -193,18 +191,22 @@ void handleIdle()
   if (buttonA.getSingleDebouncedPress())
   {
     ledRed(0);
-    calibrateFloor();          // calibrate BEFORE countdown
     doCountdownAndScan(false); // scan left (CCW)
-    currentState = STATE_CROSS_RING;
-    stateStartTime = millis();
+    if (currentState != STATE_ATTACK)
+    {
+      currentState = STATE_CROSS_RING;
+      stateStartTime = millis();
+    }
   }
   else if (buttonC.getSingleDebouncedPress())
   {
     ledRed(0);
-    calibrateFloor();         // calibrate BEFORE countdown
     doCountdownAndScan(true); // scan right (CW)
-    currentState = STATE_CROSS_RING;
-    stateStartTime = millis();
+    if (currentState != STATE_ATTACK)
+    {
+      currentState = STATE_CROSS_RING;
+      stateStartTime = millis();
+    }
   }
 }
 
@@ -217,7 +219,18 @@ void handleIdle()
 void doCountdownAndScan(bool scanCW)
 {
   unsigned long countdownStart = millis();
-  int lastAnnouncedSecond = -1;
+  int lastAnnouncedSecond = 5;
+
+  // Immediate visual/audio feedback on button press.
+  display.clear();
+  display.gotoXY(3, 0);
+  display.print(5);
+  display.gotoXY(0, 1);
+  display.print(scanCW ? F("CW") : F("CCW"));
+  buzzer.playNote(NOTE_C(4), 150, BUZZER_VOLUME);
+
+  // Calibrate after countdown start so timing starts immediately on button press.
+  calibrateFloor();
 
   while (true)
   {
@@ -369,41 +382,25 @@ void handleSearch()
     display.clear();
     display.print(F("SEARCH"));
     searchLegStart = millis();
-    searchDriving = true;
     return;
   }
 
-  // Alternating drive / turn legs
-  unsigned long legElapsed = millis() - searchLegStart;
-
-  if (searchDriving)
-  {
-    drive(SEARCH_SPEED, SEARCH_SPEED);
-    if (legElapsed > SEARCH_DRIVE_TIME)
-    {
-      searchDriving = false;
-      searchLegStart = millis();
-    }
-  }
+  // Continuous 360-style scan until target is seen.
+  if (searchTurnDir)
+    drive(-SCAN_SPEED, SCAN_SPEED); // left / CCW
   else
-  {
-    // Turn in the current search direction
-    if (searchTurnDir)
-      drive(-TURN_SPEED, TURN_SPEED); // left
-    else
-      drive(TURN_SPEED, -TURN_SPEED); // right
+    drive(SCAN_SPEED, -SCAN_SPEED); // right / CW
 
-    if (legElapsed > SEARCH_TURN_TIME)
-    {
-      searchDriving = true;
-      searchTurnDir = !searchTurnDir; // alternate next time
-      searchLegStart = millis();
-    }
+  // Flip direction occasionally to avoid drifting pattern lock.
+  if (millis() - searchLegStart > SCAN_TIMEOUT)
+  {
+    searchTurnDir = !searchTurnDir;
+    searchLegStart = millis();
   }
 
   // LCD
   display.gotoXY(0, 1);
-  display.print(searchDriving ? F(">>FWD ") : F(">>TRN "));
+  display.print(searchTurnDir ? F("SCAN CCW") : F("SCAN CW "));
 }
 
 //  STATE: ATTACK — charge the opponent!
@@ -419,7 +416,9 @@ void handleAttack()
   proxSensors.read();
   uint8_t lv = proxSensors.countsFrontWithLeftLeds();
   uint8_t rv = proxSensors.countsFrontWithRightLeds();
-  bool seen = (lv >= PROX_ATTACK_THRESHOLD) || (rv >= PROX_ATTACK_THRESHOLD);
+  bool seenStrong = (lv >= PROX_ATTACK_THRESHOLD) || (rv >= PROX_ATTACK_THRESHOLD);
+  bool seenWeak = (lv >= PROX_LOCK_THRESHOLD) || (rv >= PROX_LOCK_THRESHOLD);
+  bool seen = seenStrong || (seenWeak && (millis() - objectLastSeen <= LOCK_HOLD_TIME));
 
   if (checkBoundary())
   {
@@ -481,10 +480,12 @@ void handleAttack()
     display.gotoXY(0, 1);
     display.print(F("LOST    "));
 
+    const int16_t reacquireTurn = TURN_SPEED - 120;
+
     if (lastSenseRight)
-      drive(TURN_SPEED, -TURN_SPEED); // turn right
+      drive(reacquireTurn, -reacquireTurn); // turn right
     else
-      drive(-TURN_SPEED, TURN_SPEED); // turn left
+      drive(-reacquireTurn, reacquireTurn); // turn left
 
     // Give up after REACQUIRE_TIMEOUT and switch to search
     if (millis() - objectLastSeen > REACQUIRE_TIMEOUT)
@@ -514,7 +515,6 @@ void transitionToSearch()
 {
   drive(0, 0);
 
-  searchDriving = true;
   searchTurnDir = !searchTurnDir; // vary direction each time
   searchLegStart = millis();
 
