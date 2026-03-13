@@ -14,7 +14,7 @@ Zumo32U4ButtonC buttonC;
 // MOTOR ORIENTATION
 // Set to true if the robot's motors are mounted upside-down
 // (drives backward when it should go forward)
-const bool INVERT_MOTORS = true;
+const bool INVERT_MOTORS = false;
 
 //  DYNAMIC FLOOR CALIBRATION
 //  CALIBRATION_SAMPLES  — readings averaged per sensor when A/C starts a match
@@ -38,11 +38,23 @@ const uint8_t PROX_ATTACK_THRESHOLD = 4; // used during attack (closer = real ta
 const uint8_t PROX_LOCK_THRESHOLD = 2;   // lower threshold used to keep lock once attacking
 
 // SPEED SETTINGS
-const int16_t SEARCH_SPEED = 280; // slow — conserve position
+const int16_t SEARCH_SPEED = 350; // CHANGED: fast forward during search — cover ground aggressively
 const int16_t ATTACK_SPEED = 370; // max — full ram
 const int16_t SCAN_SPEED = 350;   // 360° scan
-const int16_t EVADE_SPEED = 370;  // 360° scan
+const int16_t EVADE_SPEED = 370;  // boundary escape burst
 const int16_t TURN_SPEED = 280;   // general turning
+
+// --- SEARCH PATTERN CONSTANTS ---
+// After bouncing off a boundary the robot turns a "bounce angle" before
+// charging across the ring again.  The angle rotates through a set of
+// offsets so successive passes cut across different chords of the circle,
+// covering more arena area than repeating the same path.
+const int16_t SEARCH_BOUNCE_TURN_BASE_MS = 220;  // base turn time (shortest chord)
+const int16_t SEARCH_BOUNCE_TURN_STEP_MS = 70;   // added per index in the angle table
+const uint8_t SEARCH_ANGLE_TABLE_SIZE    = 5;     // number of distinct bounce angles
+// Slight left-right bias keeps the robot from hugging one wall.
+// The table stores signed offsets: + = extra CW ms, - = extra CCW ms.
+const int16_t SEARCH_ANGLE_BIAS[] = { 0, 40, -30, 60, -50 };
 
 // BUZZER VOLUME
 const uint8_t BUZZER_VOLUME = 9; // 0–15 — applies to every sound
@@ -93,8 +105,10 @@ RobotState currentState = STATE_IDLE;
 unsigned long stateStartTime = 0;
 
 // Search pattern
-bool searchTurnDir = false; // false = right, true = left
+bool searchTurnDir = false;       // false = right, true = left
 unsigned long searchLegStart = 0;
+uint8_t searchBounceIndex = 0;    // cycles through SEARCH_ANGLE_TABLE_SIZE angles
+uint8_t searchBounceCount = 0;    // total bounces since entering SEARCH
 
 // Attack / tracking
 bool lastSenseRight = true;       // last-known opponent side
@@ -397,7 +411,23 @@ void handleCrossRing()
   }
 }
 
-//  STATE: SEARCH — fuzzy bouncing search pattern
+// ================================================================
+//  STATE: SEARCH — aggressive drive-to-boundary sweep pattern
+//
+//  Strategy: drive FORWARD at high speed until a boundary is hit,
+//  then bounce off at a varied angle and charge across again.
+//  Each bounce picks a different angle from a small table so
+//  successive passes cut different chords across the circular arena,
+//  maximising ground coverage over time.  The robot continuously
+//  checks proximity sensors while driving so it can snap to ATTACK
+//  the instant anything is detected.
+//
+//  Why this beats spinning-in-place:
+//  - Constant forward motion covers the full ring diameter per pass.
+//  - Varied bounce angles prevent repetitive back-and-forth ruts.
+//  - High speed means more passes per minute → more chance of
+//    physical contact even when IR can't see a black opponent.
+// ================================================================
 void handleSearch()
 {
   // B button = emergency stop
@@ -407,7 +437,7 @@ void handleSearch()
     return;
   }
 
-  // Continuously scan for opponent
+  // Continuously scan for opponent while moving
   proxSensors.read();
   uint8_t lv = proxSensors.countsFrontWithLeftLeds();
   uint8_t rv = proxSensors.countsFrontWithRightLeds();
@@ -419,31 +449,72 @@ void handleSearch()
     return;
   }
 
+  // --- Boundary hit → bounce at a varied angle and keep going ---
   if (checkBoundary())
   {
-    bounceOffBoundary();
+    searchBounceCount++;
+
+    // Pick which side to turn away from
+    int8_t side = getBoundarySide();
+    bool turnRight = (side <= 0); // left/centre hit → turn right
+
+    // Calculate the turn duration from the angle table.
+    // The table cycles so the robot never repeats the same
+    // angle more than once every SEARCH_ANGLE_TABLE_SIZE bounces.
+    int16_t turnMs = SEARCH_BOUNCE_TURN_BASE_MS
+                     + (int16_t)(searchBounceIndex % SEARCH_ANGLE_TABLE_SIZE)
+                       * SEARCH_BOUNCE_TURN_STEP_MS;
+    int16_t bias = SEARCH_ANGLE_BIAS[searchBounceIndex % SEARCH_ANGLE_TABLE_SIZE];
+    // Apply bias: positive adds time if turning right, subtracts if left
+    if (turnRight)
+      turnMs += bias;
+    else
+      turnMs -= bias;
+    // Clamp to a sane range
+    if (turnMs < 150) turnMs = 150;
+    if (turnMs > 600) turnMs = 600;
+
+    // Advance the angle index for the next bounce
+    searchBounceIndex++;
+    if (searchBounceIndex >= SEARCH_ANGLE_TABLE_SIZE)
+      searchBounceIndex = 0;
+
+    // --- Bounce manoeuvre (blocking, like original) ---
+    ledRed(1);
+    buzzer.playNote(NOTE_A(5), 150, BUZZER_VOLUME);
+
+    // Reverse briefly
+    drive(-EVADE_SPEED, -EVADE_SPEED);
+    delay(350);
+
+    // Turn away at the computed angle
+    if (turnRight)
+      drive(TURN_SPEED, -TURN_SPEED);
+    else
+      drive(-TURN_SPEED, TURN_SPEED);
+    delay(turnMs);
+
+    drive(0, 0);
+    ledRed(0);
+
+    // Alternate the default turn direction every few bounces
+    // to avoid a long-term rotational bias
+    if (searchBounceCount % 3 == 0)
+      searchTurnDir = !searchTurnDir;
+
     display.clear();
     display.print(F("SEARCH"));
-    searchLegStart = millis();
+    display.gotoXY(0, 1);
+    display.print(F("B"));
+    display.print(searchBounceCount);
     return;
   }
 
-  // Continuous 360-style scan until target is seen.
-  if (searchTurnDir)
-    drive(-SCAN_SPEED, SCAN_SPEED); // left / CCW
-  else
-    drive(SCAN_SPEED, -SCAN_SPEED); // right / CW
+  // --- Default: charge straight ahead at full search speed ---
+  drive(SEARCH_SPEED, SEARCH_SPEED);
 
-  // Flip direction occasionally to avoid drifting pattern lock.
-  if (millis() - searchLegStart > SCAN_TIMEOUT)
-  {
-    searchTurnDir = !searchTurnDir;
-    searchLegStart = millis();
-  }
-
-  // LCD
   display.gotoXY(0, 1);
-  display.print(searchTurnDir ? F("SCAN CCW") : F("SCAN CW "));
+  display.print(F("DRIVE   "));
 }
 
 // ================================================================
@@ -693,6 +764,10 @@ void transitionToSearch()
 
   searchTurnDir = !searchTurnDir; // vary direction each time
   searchLegStart = millis();
+  // Don't reset searchBounceIndex here — let it continue cycling
+  // through the angle table across multiple ATTACK→SEARCH→ATTACK
+  // transitions so the coverage pattern stays varied.
+  searchBounceCount = 0;
 
   currentState = STATE_SEARCH;
   stateStartTime = millis();
