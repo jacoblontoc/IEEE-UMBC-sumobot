@@ -14,7 +14,7 @@ Zumo32U4ButtonC buttonC;
 // MOTOR ORIENTATION
 // Set to true if the robot's motors are mounted upside-down
 // (drives backward when it should go forward)
-const bool INVERT_MOTORS = false;
+const bool INVERT_MOTORS = true;
 
 //  DYNAMIC FLOOR CALIBRATION
 //  CALIBRATION_SAMPLES  — readings averaged per sensor when A/C starts a match
@@ -39,9 +39,9 @@ const uint8_t PROX_LOCK_THRESHOLD = 2;   // lower threshold used to keep lock on
 
 // SPEED SETTINGS
 const int16_t SEARCH_SPEED = 280; // slow — conserve position
-const int16_t ATTACK_SPEED = 400; // max — full ram
+const int16_t ATTACK_SPEED = 370; // max — full ram
 const int16_t SCAN_SPEED = 350;   // 360° scan
-const int16_t EVADE_SPEED = 400;  // 360° scan
+const int16_t EVADE_SPEED = 370;  // 360° scan
 const int16_t TURN_SPEED = 280;   // general turning
 
 // BUZZER VOLUME
@@ -50,8 +50,35 @@ const uint8_t BUZZER_VOLUME = 9; // 0–15 — applies to every sound
 // SCAN / SEARCH TIMING
 const unsigned long SCAN_TIMEOUT = 2500;     // ms for 360° spin
 const unsigned long CROSS_RING_TIME = 1200;  // ms driving to far side
-const unsigned long REACQUIRE_TIMEOUT = 900; // ms to reacquire target before giving up
-const unsigned long LOCK_HOLD_TIME = 220;    // ms weak signal is still considered a lock
+const unsigned long REACQUIRE_TIMEOUT = 1100; // ms to reacquire target before giving up (longer for weak IR)
+
+// --- IMPROVED TRACKING CONSTANTS ---
+// Sensor peak-hold: remembers the best reading for this many ms,
+// bridging brief dropouts caused by the black opponent's weak IR reflection.
+const unsigned long SENSOR_HOLD_MS = 120;
+
+// Confidence tracking: a score (0–255) that rises when the target is seen
+// and falls when it is not.  Prevents a single noisy cycle from breaking lock.
+const uint8_t CONFIDENCE_GAIN_STRONG = 55;  // added per loop when signal >= PROX_ATTACK_THRESHOLD
+const uint8_t CONFIDENCE_GAIN_WEAK   = 18;  // added per loop when signal >= PROX_LOCK_THRESHOLD
+const uint8_t CONFIDENCE_DECAY       = 5;   // subtracted per loop with no signal
+const uint8_t CONFIDENCE_LOCK_MIN    = 30;  // stay in ATK_LOCK above this
+const uint8_t CONFIDENCE_COAST_MIN   = 10;  // keep coasting above this
+
+// Coast phase: after losing signal, drive forward briefly
+// (opponent may be too close for IR, or momentary noise).
+const unsigned long COAST_DURATION_MS = 200;
+
+// Reacquire sweep: oscillate left/right with forward bias.
+const unsigned long REACQUIRE_SWEEP_HALF_MS = 280; // ms per half-oscillation
+const int16_t SWEEP_BASE_SPEED = 200;              // forward component during sweep
+const int16_t SWEEP_INITIAL_WIDTH = 180;            // initial turn differential
+const int16_t SWEEP_WIDTH_GROW   = 40;              // grows each half-period
+const int16_t SWEEP_WIDTH_MAX    = 380;             // capped here
+
+// Proportional steering clamps during ATK_LOCK.
+const int16_t STEER_ADJ_MIN = 30;   // never adjust less than this (avoids dead-band)
+const int16_t STEER_ADJ_MAX = 300;  // never adjust more than this
 
 // STATE MACHINE
 enum RobotState
@@ -72,6 +99,22 @@ unsigned long searchLegStart = 0;
 // Attack / tracking
 bool lastSenseRight = true;       // last-known opponent side
 unsigned long objectLastSeen = 0; // millis() timestamp
+
+// --- IMPROVED TRACKING STATE ---
+// Peak-hold buffers: remember strongest recent reading per side
+uint8_t heldLeft = 0, heldRight = 0;
+unsigned long heldLeftTime = 0, heldRightTime = 0;
+
+// Confidence score (0–255)
+uint8_t trackConfidence = 0;
+
+// Sub-phases within ATTACK
+enum AttackPhase { ATK_LOCK, ATK_COAST, ATK_REACQUIRE };
+AttackPhase attackPhase = ATK_LOCK;
+unsigned long coastStartTime = 0;
+unsigned long sweepStartTime = 0;
+bool sweepDir = false;
+uint8_t sweepCycles = 0; // counts half-periods for widening sweep
 
 // Wraps motors.setSpeeds() — flips both channels if INVERT_MOTORS is true
 void drive(int16_t left, int16_t right)
@@ -403,7 +446,23 @@ void handleSearch()
   display.print(searchTurnDir ? F("SCAN CCW") : F("SCAN CW "));
 }
 
-//  STATE: ATTACK — charge the opponent!
+// ================================================================
+//  STATE: ATTACK — 3-phase tracking optimised for weak IR targets
+//
+//  Phase 1  ATK_LOCK:  Target visible → proportional steering at
+//           full attack speed.  Uses peak-held sensor values for
+//           lock decisions and raw values for responsive steering.
+//
+//  Phase 2  ATK_COAST: Signal just dropped out → keep driving
+//           forward with a slight bias toward the last-known side.
+//           Bridges 1–2 cycle sensor gaps without losing ground.
+//
+//  Phase 3  ATK_REACQUIRE: Still no signal → oscillating sweep
+//           with forward motion.  Sweep widens progressively.
+//           Falls back to SEARCH after REACQUIRE_TIMEOUT.
+//
+//  Any detection in any phase snaps back to ATK_LOCK immediately.
+// ================================================================
 void handleAttack()
 {
   // B button = emergency stop
@@ -413,24 +472,61 @@ void handleAttack()
     return;
   }
 
+  // ── Read sensors ──
   proxSensors.read();
-  uint8_t lv = proxSensors.countsFrontWithLeftLeds();
-  uint8_t rv = proxSensors.countsFrontWithRightLeds();
-  bool seenStrong = (lv >= PROX_ATTACK_THRESHOLD) || (rv >= PROX_ATTACK_THRESHOLD);
-  bool seenWeak = (lv >= PROX_LOCK_THRESHOLD) || (rv >= PROX_LOCK_THRESHOLD);
-  bool seen = seenStrong || (seenWeak && (millis() - objectLastSeen <= LOCK_HOLD_TIME));
+  uint8_t rawL = proxSensors.countsFrontWithLeftLeds();
+  uint8_t rawR = proxSensors.countsFrontWithRightLeds();
 
+  // ── Peak-hold: remember strongest reading per side for SENSOR_HOLD_MS ──
+  // This bridges brief 1–2 cycle dropouts that are common with
+  // black opponents reflecting very little IR light.
+  unsigned long now = millis();
+  if (rawL > 0) { heldLeft  = rawL;  heldLeftTime  = now; }
+  else if (now - heldLeftTime  > SENSOR_HOLD_MS) { heldLeft  = 0; }
+  if (rawR > 0) { heldRight = rawR;  heldRightTime = now; }
+  else if (now - heldRightTime > SENSOR_HOLD_MS) { heldRight = 0; }
+
+  // ── Classify signal strength ──
+  bool strongNow = (rawL >= PROX_ATTACK_THRESHOLD) || (rawR >= PROX_ATTACK_THRESHOLD);
+  bool weakNow   = (rawL >= PROX_LOCK_THRESHOLD)   || (rawR >= PROX_LOCK_THRESHOLD);
+  bool heldSeen  = (heldLeft >= PROX_LOCK_THRESHOLD) || (heldRight >= PROX_LOCK_THRESHOLD);
+
+  // ── Update tracking confidence ──
+  if (strongNow)
+    trackConfidence = (trackConfidence <= 255 - CONFIDENCE_GAIN_STRONG)
+                        ? trackConfidence + CONFIDENCE_GAIN_STRONG : 255;
+  else if (weakNow || heldSeen)
+    trackConfidence = (trackConfidence <= 255 - CONFIDENCE_GAIN_WEAK)
+                        ? trackConfidence + CONFIDENCE_GAIN_WEAK : 255;
+  else
+    trackConfidence = (trackConfidence >= CONFIDENCE_DECAY)
+                        ? trackConfidence - CONFIDENCE_DECAY : 0;
+
+  // ── Decide if we have a usable lock ──
+  // "locked" uses raw OR held values, gated by confidence, so a single
+  // noisy zero-reading cycle does not instantly break pursuit.
+  bool locked = (strongNow || weakNow || heldSeen)
+                && (trackConfidence >= CONFIDENCE_LOCK_MIN);
+
+  // ── Boundary check ──
   if (checkBoundary())
   {
     bounceOffBoundary();
 
+    // Re-read after the bounce to see if target is still ahead
     proxSensors.read();
-    lv = proxSensors.countsFrontWithLeftLeds();
-    rv = proxSensors.countsFrontWithRightLeds();
-    if (lv >= PROX_ATTACK_THRESHOLD || rv >= PROX_ATTACK_THRESHOLD)
+    rawL = proxSensors.countsFrontWithLeftLeds();
+    rawR = proxSensors.countsFrontWithRightLeds();
+    if (rawL >= PROX_LOCK_THRESHOLD || rawR >= PROX_LOCK_THRESHOLD)
     {
-      lastSenseRight = (rv >= lv);
-      objectLastSeen = millis();
+      // Still see something — stay aggressive, enter reacquire sweep
+      lastSenseRight = (rawR >= rawL);
+      objectLastSeen = now;
+      trackConfidence = max(trackConfidence, (uint8_t)80);
+      attackPhase = ATK_REACQUIRE;
+      sweepStartTime = now;
+      sweepDir = lastSenseRight;
+      sweepCycles = 0;
       display.clear();
       display.print(F("ATTACK!"));
     }
@@ -441,65 +537,145 @@ void handleAttack()
     return;
   }
 
-  if (seen)
-  {
-    ledYellow(1);
-    objectLastSeen = millis();
+  // ================================================================
+  //  Phase routing — any detection snaps to ATK_LOCK
+  // ================================================================
 
-    if (rv > lv)
+  if (locked)
+  {
+    // ============= ATK_LOCK: active proportional steering =============
+    attackPhase = ATK_LOCK;
+    objectLastSeen = now;
+    ledYellow(1);
+
+    // Use RAW values for steering direction (responsive), but use held
+    // values as a fallback when raw drops to zero momentarily.
+    uint8_t steerL = (rawL > 0) ? rawL : heldLeft;
+    uint8_t steerR = (rawR > 0) ? rawR : heldRight;
+    int16_t err = (int16_t)steerR - (int16_t)steerL;
+
+    if (err > 0)
     {
-      // Object biased right — curve right
-      int16_t adj = map(rv - lv, 0, 6, 0, 300);
+      // Target biased right — curve right
+      int16_t adj = map(err, 1, 6, STEER_ADJ_MIN, STEER_ADJ_MAX);
       drive(ATTACK_SPEED, ATTACK_SPEED - adj);
       lastSenseRight = true;
     }
-    else if (lv > rv)
+    else if (err < 0)
     {
-      // Object biased left — curve left
-      int16_t adj = map(lv - rv, 0, 6, 0, 300);
+      // Target biased left — curve left
+      int16_t adj = map(-err, 1, 6, STEER_ADJ_MIN, STEER_ADJ_MAX);
       drive(ATTACK_SPEED - adj, ATTACK_SPEED);
       lastSenseRight = false;
     }
     else
     {
-      // Dead-centre — full charge!
+      // Dead-centre — full charge
       drive(ATTACK_SPEED, ATTACK_SPEED);
     }
 
     display.gotoXY(0, 1);
-    display.print(F("ATK "));
-    display.print(lv);
+    display.print(F("LCK "));
+    display.print(rawL);
     display.print(' ');
-    display.print(rv);
+    display.print(rawR);
+    display.print(' ');
+    display.print(trackConfidence);
+  }
+  else if (trackConfidence >= CONFIDENCE_COAST_MIN
+           && attackPhase != ATK_REACQUIRE)
+  {
+    // ========= ATK_COAST: brief forward drive after dropout =========
+    // The opponent may be very close (IR saturated / out of range) or
+    // the sensor had a momentary glitch.  Keep charging straight with
+    // a slight bias toward the last-known side.
+    if (attackPhase != ATK_COAST)
+    {
+      attackPhase = ATK_COAST;
+      coastStartTime = now;
+    }
+
+    ledYellow(1); // LED stays on — we haven't given up yet
+
+    if (lastSenseRight)
+      drive(ATTACK_SPEED, ATTACK_SPEED - 50);
+    else
+      drive(ATTACK_SPEED - 50, ATTACK_SPEED);
+
+    // Transition to reacquire sweep after coast window
+    if (now - coastStartTime > COAST_DURATION_MS)
+    {
+      attackPhase = ATK_REACQUIRE;
+      sweepStartTime = now;
+      sweepDir = lastSenseRight;
+      sweepCycles = 0;
+    }
+
+    display.gotoXY(0, 1);
+    display.print(F("COAST   "));
   }
   else
   {
-    // Lost sight
+    // ====== ATK_REACQUIRE: oscillating sweep with forward motion ======
+    // Sweeps left-right around the last known direction,
+    // progressively widening each half-period to cover more area.
+    // Forward component keeps the robot advancing, not just spinning.
+    if (attackPhase != ATK_REACQUIRE)
+    {
+      attackPhase = ATK_REACQUIRE;
+      sweepStartTime = now;
+      sweepDir = lastSenseRight;
+      sweepCycles = 0;
+    }
+
     ledYellow(0);
 
-    display.gotoXY(0, 1);
-    display.print(F("LOST    "));
+    unsigned long sweepElapsed = now - sweepStartTime;
+    uint8_t halfPeriods = (uint8_t)(sweepElapsed / REACQUIRE_SWEEP_HALF_MS);
 
-    const int16_t reacquireTurn = TURN_SPEED - 120;
+    // Flip direction each half-period
+    bool curDir = sweepDir;
+    if (halfPeriods % 2 == 1) curDir = !curDir;
 
-    if (lastSenseRight)
-      drive(reacquireTurn, -reacquireTurn); // turn right
-    else
-      drive(-reacquireTurn, reacquireTurn); // turn left
+    // Widen the sweep progressively (capped)
+    int16_t width = SWEEP_INITIAL_WIDTH + ((int16_t)halfPeriods * SWEEP_WIDTH_GROW);
+    if (width > SWEEP_WIDTH_MAX) width = SWEEP_WIDTH_MAX;
 
-    // Give up after REACQUIRE_TIMEOUT and switch to search
-    if (millis() - objectLastSeen > REACQUIRE_TIMEOUT)
+    // Forward-biased sweep: not a pure spin, robot covers ground
+    if (curDir) // sweep right
+      drive(SWEEP_BASE_SPEED + width, SWEEP_BASE_SPEED - width);
+    else        // sweep left
+      drive(SWEEP_BASE_SPEED - width, SWEEP_BASE_SPEED + width);
+
+    // Give up after REACQUIRE_TIMEOUT → transition to SEARCH
+    if (now - objectLastSeen > REACQUIRE_TIMEOUT)
     {
       transitionToSearch();
     }
+
+    display.gotoXY(0, 1);
+    display.print(F("REACQ   "));
   }
 }
 
 //  HELPER: transition into ATTACK state
+//  Initialises all tracking state so ATTACK begins with a warm lock.
 void transitionToAttack(bool opponentOnRight)
 {
   lastSenseRight = opponentOnRight;
   objectLastSeen = millis();
+
+  // Pre-load confidence so the first few noisy cycles don't
+  // immediately drop us back to SEARCH.
+  trackConfidence = 90;
+  attackPhase = ATK_LOCK;
+
+  // Seed peak-hold buffers with the triggering reading
+  proxSensors.read();
+  heldLeft  = proxSensors.countsFrontWithLeftLeds();
+  heldRight = proxSensors.countsFrontWithRightLeds();
+  heldLeftTime  = millis();
+  heldRightTime = millis();
 
   currentState = STATE_ATTACK;
   stateStartTime = millis();
