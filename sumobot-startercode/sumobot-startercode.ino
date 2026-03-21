@@ -16,20 +16,16 @@ Zumo32U4ButtonC buttonC;
 // (drives backward when it should go forward)
 const bool INVERT_MOTORS = false;
 
-//  DYNAMIC FLOOR CALIBRATION
-//  CALIBRATION_SAMPLES  — readings averaged per sensor when A/C starts a match
-//  CALIBRATION_DELAY_MS — pause between samples during floor calibration
-//  BOUNDARY_TOLERANCE   — allowed deviation from baseline before boundary hit
+//  BOUNDARY DETECTION — fixed threshold
+//  Arena (safe) colours read HIGH:  Black ≈ 559, Brown ≈ 268
+//  Boundary (out-of-bounds) colours read LOW:  White ≈ 103, Green ≈ 72
+//  Any sensor reading BELOW this threshold triggers a boundary response.
 
 #define NUM_LINE_SENSORS 5
 
-const uint8_t CALIBRATION_SAMPLES = 30;
-const uint8_t CALIBRATION_DELAY_MS = 5;
-const uint16_t BOUNDARY_TOLERANCE = 400;
+const uint16_t BOUNDARY_THRESHOLD = 185;
 
 uint16_t lineSensorValues[NUM_LINE_SENSORS];
-uint16_t floorBaseline[NUM_LINE_SENSORS];
-bool floorCalibrated = false;
 
 // PROXIMITY THRESHOLDS
 // Sensor returns 0–6.  Lower = more sensitive (detects farther away).
@@ -38,11 +34,11 @@ const uint8_t PROX_ATTACK_THRESHOLD = 4; // used during attack (closer = real ta
 const uint8_t PROX_LOCK_THRESHOLD = 2;   // lower threshold used to keep lock once attacking
 
 // SPEED SETTINGS
-const int16_t SEARCH_SPEED = 350; // CHANGED: fast forward during search — cover ground aggressively
-const int16_t ATTACK_SPEED = 370; // max — full ram
+const int16_t SEARCH_SPEED = 400; // CHANGED: fast forward during search — cover ground aggressively
+const int16_t ATTACK_SPEED = 400; // max — full ram
 const int16_t SCAN_SPEED = 350;   // 360° scan
-const int16_t EVADE_SPEED = 370;  // boundary escape burst
-const int16_t TURN_SPEED = 280;   // general turning
+const int16_t EVADE_SPEED = 400;  // boundary escape burst
+const int16_t TURN_SPEED = 320;   // general turning
 
 // --- SEARCH PATTERN CONSTANTS ---
 // After bouncing off a boundary the robot turns a "bounce angle" before
@@ -189,54 +185,37 @@ void emergencyStop()
   currentState = STATE_IDLE;
 }
 
-//  FLOOR CALIBRATION
-//  Called when A/C starts a match. Robot must be sitting still on the arena
-//  floor (not on the tawara/boundary) when this runs.
+//  SENSOR CHECK — reads sensors once at startup for a quick sanity check.
+//  No calibration needed; boundary detection uses a fixed threshold.
 void calibrateFloor()
 {
   display.clear();
-  display.print(F("CAL..."));
+  display.print(F("CHK..."));
 
-  Serial.println(F("\n===== FLOOR CALIBRATION ====="));
-  Serial.print(F("Sampling "));
-  Serial.print(CALIBRATION_SAMPLES);
-  Serial.println(F(" times..."));
+  Serial.println(F("\n===== SENSOR CHECK ====="));
+  Serial.print(F("Boundary threshold: <"));
+  Serial.println(BOUNDARY_THRESHOLD);
 
-  uint32_t sums[NUM_LINE_SENSORS] = {0, 0, 0, 0, 0};
+  lineSensors.read(lineSensorValues);
 
-  for (uint8_t sample = 0; sample < CALIBRATION_SAMPLES; sample++)
-  {
-    lineSensors.read(lineSensorValues);
-    for (uint8_t index = 0; index < NUM_LINE_SENSORS; index++)
-    {
-      sums[index] += lineSensorValues[index];
-    }
-    delay(CALIBRATION_DELAY_MS);
-  }
-
-  Serial.print(F("Baseline -> "));
+  Serial.print(F("Readings -> "));
   for (uint8_t index = 0; index < NUM_LINE_SENSORS; index++)
   {
-    floorBaseline[index] = (uint16_t)(sums[index] / CALIBRATION_SAMPLES);
     Serial.print(F("S"));
     Serial.print(index);
     Serial.print(F("="));
-    Serial.print(floorBaseline[index]);
+    Serial.print(lineSensorValues[index]);
     if (index < NUM_LINE_SENSORS - 1)
       Serial.print(F("  "));
   }
   Serial.println();
-  Serial.print(F("Tolerance: +/-"));
-  Serial.println(BOUNDARY_TOLERANCE);
 
-  floorCalibrated = true;
-
-  // Show centre-sensor baseline on LCD as a quick sanity check
+  // Show centre-sensor reading on LCD as a quick sanity check
   display.clear();
-  display.print(F("CAL OK"));
+  display.print(F("CHK OK"));
   display.gotoXY(0, 1);
   display.print(F("C="));
-  display.print(floorBaseline[2]);
+  display.print(lineSensorValues[2]);
 }
 
 //  STATE: IDLE — waiting for button press
@@ -786,29 +765,23 @@ const unsigned long BOUNDARY_DEBUG_INTERVAL = 200; // ms between debug prints
 
 bool checkBoundary()
 {
-  if (!floorCalibrated)
-    return false;
-
   lineSensors.read(lineSensorValues);
 
   bool shouldPrint = (millis() - lastBoundaryDebug >= BOUNDARY_DEBUG_INTERVAL);
   bool boundaryHit = false;
   uint8_t triggerSensor = 255;
-  uint16_t triggerDev = 0;
+  uint16_t triggerVal = 0;
 
-  // Check all sensors first
+  // A reading BELOW BOUNDARY_THRESHOLD means the sensor is over a
+  // boundary colour (White ≈ 103, Green ≈ 72) rather than a safe
+  // arena colour (Brown ≈ 268, Black ≈ 559).
   for (uint8_t i = 0; i < NUM_LINE_SENSORS; i++)
   {
-    uint16_t baseline = floorBaseline[i];
-    uint16_t reading = lineSensorValues[i];
-    uint16_t deviation = (reading > baseline)
-                             ? (reading - baseline)
-                             : (baseline - reading);
-    if (deviation > BOUNDARY_TOLERANCE && !boundaryHit)
+    if (lineSensorValues[i] < BOUNDARY_THRESHOLD && !boundaryHit)
     {
       boundaryHit = true;
       triggerSensor = i;
-      triggerDev = deviation;
+      triggerVal = lineSensorValues[i];
     }
   }
 
@@ -820,29 +793,21 @@ bool checkBoundary()
     Serial.print(F("LINE: "));
     for (uint8_t i = 0; i < NUM_LINE_SENSORS; i++)
     {
-      uint16_t baseline = floorBaseline[i];
-      uint16_t reading = lineSensorValues[i];
-      int16_t diff = (int16_t)reading - (int16_t)baseline;
-
       Serial.print(F("S"));
       Serial.print(i);
       Serial.print(F(":"));
-      Serial.print(reading);
-      Serial.print(F("("));
-      if (diff >= 0)
-        Serial.print(F("+"));
-      Serial.print(diff);
-      Serial.print(F(") "));
+      Serial.print(lineSensorValues[i]);
+      Serial.print(F(" "));
     }
 
     if (boundaryHit)
     {
       Serial.print(F(" >>> BOUNDARY! S"));
       Serial.print(triggerSensor);
-      Serial.print(F(" dev="));
-      Serial.print(triggerDev);
-      Serial.print(F(" > tol="));
-      Serial.print(BOUNDARY_TOLERANCE);
+      Serial.print(F(" val="));
+      Serial.print(triggerVal);
+      Serial.print(F(" < thresh="));
+      Serial.print(BOUNDARY_THRESHOLD);
     }
     Serial.println();
   }
@@ -859,12 +824,7 @@ int8_t getBoundarySide()
 
   for (uint8_t i = 0; i < NUM_LINE_SENSORS; i++)
   {
-    uint16_t baseline = floorBaseline[i];
-    uint16_t reading = lineSensorValues[i];
-    uint16_t deviation = (reading > baseline)
-                             ? (reading - baseline)
-                             : (baseline - reading);
-    if (deviation > BOUNDARY_TOLERANCE)
+    if (lineSensorValues[i] < BOUNDARY_THRESHOLD)
     {
       if (i <= 1)
         leftHit = true; // sensors 0,1
