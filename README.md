@@ -1,6 +1,6 @@
 # IEEE UMBC Sumobot
 
-Team project "Creatine Crackheads" for the IEEE Region 1 and Region 2 Joint Student Conference, Spring 2026.
+Team project "Creatine Crackheads" for the IEEE Region 1 and Region 2 Joint Student Activities Conference, Spring 2026.
 
 This repository contains the code, documentation, and development notes for our Zumo 32U4 sumobot. The project placed #1 in the competition and finished ahead of 15 other teams.
 
@@ -51,12 +51,12 @@ Location: Library
 
 The original summarized checklist is kept here as part of the project record:
 
-- [ ] Soldering Robot
-- [ ] Creating state machine
-- [ ] Programming basic states
-- [ ] Programming attack state
-- [ ] Programming search state
-- [ ] Programming defense state?
+- [x] Soldering Robot
+- [x] Creating state machine
+- [x] Programming basic states
+- [x] Programming attack state
+- [x] Programming search state
+- [x] Programming defense state?
 
 ## Key Dates
 
