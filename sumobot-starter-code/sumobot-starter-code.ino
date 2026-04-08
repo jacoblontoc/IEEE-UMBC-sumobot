@@ -29,14 +29,14 @@ uint16_t lineSensorValues[NUM_LINE_SENSORS];
 
 // PROXIMITY THRESHOLDS
 // Sensor returns 0–6.  Lower = more sensitive (detects farther away).
-const uint8_t PROX_SEARCH_THRESHOLD = 3; // used during scan / search / cross-ring
-const uint8_t PROX_ATTACK_THRESHOLD = 4; // used during attack (closer = real target)
+const uint8_t PROX_SEARCH_THRESHOLD = 4; // used during scan / search / cross-ring
+const uint8_t PROX_ATTACK_THRESHOLD = 5; // used during attack (closer = real target)
 const uint8_t PROX_LOCK_THRESHOLD = 2;   // lower threshold used to keep lock once attacking
 
 // SPEED SETTINGS
 const int16_t SEARCH_SPEED = 400; // CHANGED: fast forward during search — cover ground aggressively
 const int16_t ATTACK_SPEED = 400; // max — full ram
-const int16_t SCAN_SPEED = 350;   // 360° scan
+const int16_t SCAN_SPEED = 380;   // 360° scan
 const int16_t EVADE_SPEED = 400;  // boundary escape burst
 const int16_t TURN_SPEED = 320;   // general turning
 
@@ -56,7 +56,7 @@ const int16_t SEARCH_ANGLE_BIAS[] = { 0, 40, -30, 60, -50 };
 const uint8_t BUZZER_VOLUME = 9; // 0–15 — applies to every sound
 
 // SCAN / SEARCH TIMING
-const unsigned long SCAN_TIMEOUT = 2500;     // ms for 360° spin
+const unsigned long SCAN_TIMEOUT = 450;     // ms for 360° spin
 const unsigned long CROSS_RING_TIME = 1200;  // ms driving to far side
 const unsigned long REACQUIRE_TIMEOUT = 1100; // ms to reacquire target before giving up (longer for weak IR)
 

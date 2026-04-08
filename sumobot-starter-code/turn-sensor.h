@@ -1,4 +1,4 @@
-// Turnsensor.h provides functions for configuring the
+// turn-sensor.h provides functions for configuring the
 // Zumo 32U4's gyro, calibrating it, and using it to
 // measure how much the robot has turned about its Z axis.
 //
